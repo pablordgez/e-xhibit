@@ -11,7 +11,28 @@ import {
 
 export const HEADROOM = 2.1;
 export const SLAB = 0.12;
+export const CEILING_SLAB = STOREY - HEIGHT - SLAB;
 export const SPIRAL_RADIUS = 2.05;
+
+/** Keep every floor fragment on one world-space board grid. */
+export function boardLines(area: WalkArea) {
+  const lines: number[] = [];
+  const start = Math.ceil((area.z - area.d / 2 + 0.0001) / 0.4);
+  for (let i = start; i * 0.4 < area.z + area.d / 2 - 0.0001; i++) lines.push(i * 0.4);
+  return lines;
+}
+
+/** Low treads and the centre post block walking; overhead treads do not. */
+export function spiralObstructs(area: WalkArea, point: Vec, height = 1.8) {
+  const radius = Math.hypot(point.x - area.x, point.z - area.z);
+  if (radius > SPIRAL_RADIUS + 0.13) return false;
+  if (radius < 0.32) return true;
+  const angle = (Math.atan2(point.z - area.z, point.x - area.x) + Math.PI * 2) % (Math.PI * 2);
+  // Include the character radius when testing the lower neighbouring tread.
+  const anglePadding = Math.asin(Math.min(1, 0.13 / radius));
+  const underside = (Math.max(0, angle - anglePadding) / (Math.PI * 2)) * STOREY - 0.13;
+  return underside < height;
+}
 
 export function contains(area: WalkArea, point: Vec, padding = 0) {
   return area.shape === 'circle'
@@ -69,11 +90,11 @@ export function stairArchitecture(doc: MuseumDocument, ramps: Ramp[]) {
     for (const side of [-1, 1])
       structures.push({
         name: 'stairwell-side',
-        x: mid.x + dz * side * (ramp.width / 2 + 0.06),
-        z: mid.z + dx * side * (ramp.width / 2 + 0.06),
+        x: mid.x + dz * side * (ramp.width / 2 + 0.1),
+        z: mid.z + dx * side * (ramp.width / 2 + 0.1),
         y: bottom,
-        w: dx ? run + 0.12 : 0.12,
-        d: dz ? run + 0.12 : 0.12,
+        w: dx ? run + 0.24 : 0.24,
+        d: dz ? run + 0.24 : 0.24,
         h: STOREY + HEIGHT,
         color: low.color,
       });

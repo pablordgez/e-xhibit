@@ -1,4 +1,5 @@
-import { surfacePlates, contains } from '../core/architecture';
+import { surfacePlates, contains, boardLines, CEILING_SLAB } from '../core/architecture';
+import { guidedStops, pathToGuidedStop, type GuidedStop } from '../core/guided';
 import { buildStairs, buildFurnishings, buildCircularSlab, type TextureSlot } from './details';
 import { useEffect, useRef, useState } from 'react';
 import { Engine } from '@babylonjs/core/Engines/engine';
@@ -156,7 +157,7 @@ export default function MuseumScene({
           material,
           room?.finish === 'stone' ? '#c2bdb0' : '#bba68a',
           false,
-          room?.finish === 'wood',
+          room?.finish !== 'stone',
         )
       )
         continue;
@@ -172,8 +173,8 @@ export default function MuseumScene({
           plate.d,
           room?.finish === 'stone' ? '#c2bdb0' : '#bba68a',
         );
-        if (room?.finish === 'wood') {
-          for (let z = plate.z - plate.d / 2 + 0.4; z < plate.z + plate.d / 2; z += 0.4)
+        if (room?.finish !== 'stone') {
+          for (const z of boardLines(plate))
             box('wood-joint', plate.x, area.y + 0.003, z, plate.w, 0.002, 0.008, '#a7947d');
         }
       }
@@ -196,10 +197,10 @@ export default function MuseumScene({
           box(
             'ceiling',
             plate.x,
-            ceilingY + 0.06,
+            ceilingY + CEILING_SLAB / 2,
             plate.z,
             plate.w,
-            0.12,
+            CEILING_SLAB,
             plate.d,
             room?.color ?? '#eeece5',
           );
@@ -222,7 +223,7 @@ export default function MuseumScene({
         glow.material = emissive;
       }
     }
-    for (const wall of corridorBoundaries(layout))
+    for (const wall of corridorBoundaries(layout)) {
       box(
         'corridor-boundary',
         wall.x,
@@ -233,6 +234,17 @@ export default function MuseumScene({
         wall.d,
         '#eeece5',
       );
+      box(
+        'skirting',
+        wall.x,
+        wall.y + 0.07,
+        wall.z,
+        wall.w > wall.d ? wall.w + 0.02 : 0.16,
+        0.14,
+        wall.d > wall.w ? wall.d + 0.02 : 0.16,
+        '#d9d5c9',
+      );
+    }
     for (const wall of layout.walls) {
       const room = roomMap.get(wall.roomId)!,
         horizontal = wall.side === 'north' || wall.side === 'south';
@@ -260,20 +272,26 @@ export default function MuseumScene({
         )
           piece(0, 2, (HEIGHT + 2.7) / 2, HEIGHT - 2.7);
       } else piece(0, 6, HEIGHT / 2, HEIGHT);
-      if (!wall.opening)
+      for (const [offset, length] of wall.opening
+        ? [
+            [-2, 2.02],
+            [2, 2.02],
+          ]
+        : [[0, 6.02]])
         box(
           'skirting',
-          wall.center.x,
+          wall.center.x + (horizontal ? offset : 0),
           wall.center.y + 0.07,
-          wall.center.z,
-          horizontal ? 5.99 : 0.16,
+          wall.center.z + (horizontal ? 0 : offset),
+          horizontal ? length : 0.16,
           0.14,
-          horizontal ? 0.16 : 5.99,
+          horizontal ? 0.16 : length,
           '#d9d5c9',
         );
     }
     buildStairs(layout, scene, box, material);
     const textures: TextureSlot[] = [];
+    const plaques: { mesh: Mesh; material: StandardMaterial; draw: () => DynamicTexture }[] = [];
     const frameColors: Record<string, string> = {
       none: '#eee9df',
       black: '#292b28',
@@ -360,7 +378,7 @@ export default function MuseumScene({
       });
       if (region.plaque !== 'none') {
         const pw = region.plaque === 'right' ? 0.7 : Math.min(fit.w, 1.2),
-          ph = region.plaque === 'right' ? 0.8 : 0.38,
+          ph = region.plaque === 'right' ? 0.8 : 0.48,
           plaque = MeshBuilder.CreatePlane(
             'explanation',
             { width: pw, height: ph, sideOrientation: Mesh.DOUBLESIDE },
@@ -372,58 +390,116 @@ export default function MuseumScene({
             : at(cx, region.y + 0.24, 0.1);
         plaque.rotation.y = angle;
         plaque.metadata = { kind: 'art', id: asset.id, narrate: true };
-        const texture = new DynamicTexture(
-            'plaque',
-            { width: 768, height: region.plaque === 'right' ? 850 : 280 },
-            scene,
-            false,
-          ),
-          ctx = texture.getContext();
-        ctx.fillStyle = '#f7f4ed';
-        ctx.fillRect(0, 0, 768, 850);
-        ctx.fillStyle = '#333a31';
-        ctx.font = 'bold 30px Georgia';
-        ctx.fillText(asset.title, 30, 48);
-        ctx.font = '20px sans-serif';
-        const words = asset.explanation.split(/\s+/);
-        let line = '',
-          y = 86;
-        for (const word of words) {
-          if (ctx.measureText(line + word).width > 700) {
-            ctx.fillText(line, 30, y);
-            y += 27;
-            line = '';
+        const pixelWidth = Math.min(1536, Math.round((2048 * pw) / ph)),
+          pixelHeight = Math.round((pixelWidth * ph) / pw);
+        const draw = () => {
+          const texture = new DynamicTexture(
+              'plaque',
+              { width: pixelWidth, height: pixelHeight },
+              scene,
+              true,
+            ),
+            ctx = texture.getContext();
+          const actualSize = texture.getSize();
+          ctx.scale(actualSize.width / pixelWidth, actualSize.height / pixelHeight);
+          texture.anisotropicFilteringLevel = 16;
+          const scale = pixelWidth / pw;
+          const margin = scale * 0.025,
+            lineHeight = scale * 0.047;
+          ctx.fillStyle = '#f7f4ed';
+          ctx.fillRect(0, 0, pixelWidth, pixelHeight);
+          ctx.fillStyle = '#333a31';
+          ctx.font = `bold ${scale * 0.043}px Georgia`;
+          ctx.fillText(asset.title, margin, margin + scale * 0.043, pixelWidth - margin * 2);
+          ctx.font = `${scale * 0.034}px sans-serif`;
+          const words = asset.explanation.split(/\s+/);
+          let line = '';
+          const lines: string[] = [];
+          for (const word of words) {
+            if (line && ctx.measureText(line + word).width > pixelWidth - margin * 2) {
+              lines.push(line);
+              line = '';
+            }
+            line += word + ' ';
           }
-          line += word + ' ';
-        }
-        ctx.fillText(line, 30, y);
-        texture.update();
+          if (line) lines.push(line);
+          const firstLine = margin + scale * 0.105;
+          const capacity = Math.max(
+            1,
+            Math.floor((pixelHeight - margin - firstLine) / lineHeight) + 1,
+          );
+          const overflow = lines.length > capacity;
+          const shown = lines.slice(0, overflow ? Math.max(0, capacity - 1) : capacity);
+          shown.forEach((text, i) => ctx.fillText(text, margin, firstLine + i * lineHeight));
+          if (overflow) {
+            ctx.font = `italic ${scale * 0.029}px sans-serif`;
+            ctx.fillText(
+              'Select to read the full text',
+              margin,
+              firstLine + (capacity - 1) * lineHeight,
+              pixelWidth - margin * 2,
+            );
+          }
+          texture.update();
+          return texture;
+        };
         const pm = new StandardMaterial('plaque-mat', scene);
-        pm.diffuseTexture = texture;
         pm.emissiveColor = new Color3(0.35, 0.35, 0.35);
+        pm.diffuseColor = Color3.FromHexString('#f7f4ed');
         plaque.material = pm;
+        plaques.push({ mesh: plaque, material: pm, draw });
       }
     }
     buildFurnishings(doc, layout, scene, box, material, textures);
     const markers: Mesh[] = [];
-    for (const stop of stops) {
+    for (const stop of guidedStops(doc, layout)) {
       const marker = MeshBuilder.CreateCylinder(
         'Move here',
-        { diameter: 0.95, height: 0.015, tessellation: 40 },
+        { diameter: stop.stairs ? 0.7 : 0.85, height: 0.015, tessellation: 40 },
         scene,
       );
       marker.position.set(stop.x, stop.y + 0.025, stop.z);
       marker.material = material('#f4f0e8');
-      marker.metadata = { kind: 'move', id: stop.roomId, point: stop };
+      marker.metadata = { kind: 'move', id: stop.roomId, point: stop, label: stop.label };
       const ring = MeshBuilder.CreateTorus(
         'destination outline',
-        { diameter: 0.85, thickness: 0.035, tessellation: 40 },
+        { diameter: stop.stairs ? 0.62 : 0.76, thickness: 0.035, tessellation: 40 },
         scene,
       );
       ring.parent = marker;
       ring.position.y = 0.015;
       ring.material = material('#585650');
       ring.isPickable = false;
+      if (stop.stairs) {
+        const texture = new DynamicTexture(
+          'stair-direction',
+          { width: 256, height: 256 },
+          scene,
+          false,
+        );
+        texture.drawText(
+          stop.stairs === 'up' ? '↑ UP' : '↓ DOWN',
+          null,
+          148,
+          'bold 48px sans-serif',
+          '#343a34',
+          '#f4f0e8',
+          true,
+        );
+        const label = MeshBuilder.CreatePlane(
+          stop.label,
+          { size: 0.5, sideOrientation: Mesh.DOUBLESIDE },
+          scene,
+        );
+        label.parent = marker;
+        label.rotation.x = Math.PI / 2;
+        label.position.y = 0.02;
+        const ink = new StandardMaterial('stair-direction', scene);
+        ink.diffuseTexture = texture;
+        ink.emissiveColor = new Color3(0.5, 0.5, 0.5);
+        label.material = ink;
+        label.isPickable = false;
+      }
       markers.push(marker);
     }
     const keys = new Set<string>();
@@ -505,7 +581,10 @@ export default function MuseumScene({
       );
       const meta = pick?.pickedMesh?.metadata;
       if (meta?.kind === 'move') {
-        startRoom(meta.id, meta.point);
+        if (path.length) return;
+        path = pathToGuidedStop(layout, body, currentRoom, meta.point as GuidedStop);
+        goal = meta.point.inCorridor ? currentRoom : meta.id;
+        state.current.onTravel(path.length > 0);
       } else if (meta) {
         path = [];
         goal = null;
@@ -544,7 +623,11 @@ export default function MuseumScene({
       lastUpdate = 0,
       frames = 0;
     state.current.onRoom(currentRoom);
-    engine.setHardwareScalingLevel(window.matchMedia('(pointer: coarse)').matches ? 1.5 : 1);
+    let movementScale = window.matchMedia('(pointer: coarse)').matches ? 1.5 : 1;
+    let lastMotion = performance.now(),
+      sharp = false;
+    let lastPose = [body.x, body.y, body.z, camera.rotation.x, camera.rotation.y];
+    engine.setHardwareScalingLevel(movementScale);
     engine.runRenderLoop(() => {
       if (disposed) return;
       const dt = Math.min(engine.getDeltaTime() / 1000, 0.04),
@@ -621,13 +704,41 @@ export default function MuseumScene({
           s.mode === 'points' &&
             !path.length &&
             Math.abs(m.position.y - body.y) < 0.2 &&
-            distance(body, m.position) > 0.8 &&
+            (!m.metadata.point.rooms || m.metadata.point.rooms.includes(currentRoom)) &&
+            distance(body, m.position) > (m.metadata.point.stairs ? 0.25 : 0.8) &&
             distance(body, m.position) < 7.5,
         ),
       );
       const now = performance.now();
+      const pose = [body.x, body.y, body.z, camera.rotation.x, camera.rotation.y];
+      if (pose.some((v, i) => Math.abs(v - lastPose[i]) > 0.0001)) lastMotion = now;
+      lastPose = pose;
+      const reading = now - lastMotion > 700;
+      if (reading !== sharp) {
+        sharp = reading;
+        engine.setHardwareScalingLevel(
+          sharp ? 1 / Math.min(2, window.devicePixelRatio || 1) : movementScale,
+        );
+      }
       if (now - lastUpdate > 800) {
         lastUpdate = now;
+        // Only nearby labels need high-resolution canvases on the GPU.
+        const nearbyPlaques = new Set(
+          plaques
+            .map((p) => ({ p, d: Vector3.Distance(camera.position, p.mesh.position) }))
+            .filter(({ d }) => d < 12)
+            .sort((a, b) => a.d - b.d)
+            .slice(0, 24)
+            .map(({ p }) => p),
+        );
+        for (const p of plaques) {
+          if (nearbyPlaques.has(p)) {
+            if (!p.material.diffuseTexture) p.material.diffuseTexture = p.draw();
+          } else if (p.material.diffuseTexture) {
+            p.material.diffuseTexture.dispose();
+            p.material.diffuseTexture = null;
+          }
+        }
         for (const t of textures) {
           const d = Vector3.Distance(camera.position, t.mesh.position);
           const visible = d < 20 && Math.abs(camera.position.y - t.mesh.position.y) < 7;
@@ -678,8 +789,10 @@ export default function MuseumScene({
             });
         }
       }
-      if (++frames % 240 === 0 && engine.getFps() < 28 && engine.getHardwareScalingLevel() < 2.5)
-        engine.setHardwareScalingLevel(engine.getHardwareScalingLevel() + 0.25);
+      if (++frames % 240 === 0 && !sharp && engine.getFps() < 28 && movementScale < 2.5) {
+        movementScale += 0.25;
+        engine.setHardwareScalingLevel(movementScale);
+      }
       scene.render();
     });
     return () => {

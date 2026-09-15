@@ -7,7 +7,7 @@ import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTextur
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { type Layout, type MuseumDocument, type Vec, type WalkArea } from '../core/model';
-import { straightTreads, SPIRAL_RADIUS } from '../core/architecture';
+import { straightTreads, SPIRAL_RADIUS, boardLines, CEILING_SLAB } from '../core/architecture';
 
 export type TextureSlot = {
   mesh: Mesh;
@@ -59,7 +59,7 @@ export function buildCircularSlab(
     positions: number[] = [],
     indices: number[] = [];
   const bottom = ceiling ? area.y : area.y - 0.12,
-    top = bottom + 0.12;
+    top = bottom + (ceiling ? CEILING_SLAB : 0.12);
   const quad = (a: Vec, b: Vec, c: Vec, d: Vec) => {
     const i = positions.length / 3;
     for (const p of [a, b, c, d]) positions.push(p.x, p.y, p.z);
@@ -106,7 +106,7 @@ export function buildCircularSlab(
   data.applyToMesh(mesh);
   mesh.material = material(color);
   if (wood && !ceiling)
-    for (let z = area.z - area.d / 2 + 0.4; z < area.z + area.d / 2; z += 0.4) {
+    for (const z of boardLines(area)) {
       const offset = z - area.z;
       const gap = Math.abs(offset) < radius ? Math.sqrt(radius * radius - offset * offset) : 0;
       if (!gap) box('wood-joint', area.x, area.y + 0.003, z, area.w, 0.002, 0.008, '#a7947d');
@@ -191,10 +191,10 @@ export function buildStairs(layout: Layout, scene: Scene, box: Box, material: Ma
         indices: number[] = [];
       const angleA = (i / count) * Math.PI * 2,
         angleB = ((i + 1) / count) * Math.PI * 2 + 0.003;
-      const y = bottom + ((top - bottom) * (i + 1)) / count;
+      const y = bottom + ((top - bottom) * (i + 1)) / count + (i === count - 1 ? 0.004 : 0);
       const segments = 4;
       for (const height of [y - 0.13, y])
-        for (const radius of [0.1, SPIRAL_RADIUS])
+        for (const radius of [0.1, i === count - 1 ? 2.5 : SPIRAL_RADIUS])
           for (let n = 0; n <= segments; n++) {
             const angle = angleA + ((angleB - angleA) * n) / segments;
             positions.push(cx + radius * Math.cos(angle), height, cz + radius * Math.sin(angle));
@@ -228,7 +228,18 @@ export function buildStairs(layout: Layout, scene: Scene, box: Box, material: Ma
     column.position.set(cx, bottom + (top - bottom + 0.06) / 2, cz);
     column.material = material('#363b38');
     for (const y of [bottom, top]) {
-      box('spiral-landing', cx + 1.99, y - 0.06, cz, 1.02, 0.12, 0.94, '#b09a7b');
+      // The upper fan tread extends all the way into the floor. Its radial
+      // landing overlaps the entire walking exit, rather than a small corner.
+      box(
+        'spiral-landing',
+        cx + 1.99,
+        y - 0.06,
+        cz - (y === top ? 0.2 : 0),
+        1.02,
+        0.12,
+        y === top ? 0.55 : 0.94,
+        '#b09a7b',
+      );
       const collar = MeshBuilder.CreateCylinder(
         'column-anchor',
         { diameter: 0.4, height: 0.045, tessellation: 24 },

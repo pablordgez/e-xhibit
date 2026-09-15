@@ -119,3 +119,56 @@ test('an ordinary gift shop has freestanding displays and greenery', async ({ pa
     ]),
   );
 });
+
+test('artwork labels are sharp and skirting joins doorway walls and corridors', async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/visit');
+  await page.getByRole('button', { name: 'Enter exhibition', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'Nearby destinations' })
+    .getByRole('button', { name: 'Studies in light', exact: true })
+    .click();
+  await expect(page.locator('.location-pill strong')).toHaveText('Studies in light');
+  await aimAt(page, 'explanation');
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+        const { Engine } = await import(module);
+        return Engine.LastCreatedScene.getEngine().getHardwareScalingLevel();
+      }),
+    )
+    .toBe(1);
+  await page.screenshot({ path: 'output/playwright/readable-artwork-label.png' });
+  const result = await page.evaluate(async () => {
+    const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+    const { Engine } = await import(module);
+    const scene = Engine.LastCreatedScene;
+    const p = scene.getMeshByName('explanation');
+    const size = p.material.diffuseTexture.getSize();
+    const b = p.getBoundingInfo().boundingBox.extendSize;
+    const trim = scene.meshes.filter((m: any) => m.name === 'skirting');
+    return {
+      resolution: size.width,
+      ratio: size.width / size.height,
+      physicalRatio: b.x / b.y,
+      doorSides: trim.filter(
+        (m: any) =>
+          Math.abs(m.position.z + 3) < 0.01 &&
+          Math.abs(m.position.x) > 1 &&
+          Math.abs(m.position.x) < 3,
+      ).length,
+      corridor: trim.some((m: any) => m.position.x < -3 && m.position.x > -9),
+      mergedJoin: trim
+        .filter((m: any) => Math.abs(m.position.z + 9) < 0.01 && [0, 6].includes(m.position.x))
+        .every((m: any) => m.getBoundingInfo().boundingBox.extendSize.x >= 3),
+    };
+  });
+  expect(result.resolution).toBeGreaterThanOrEqual(1536);
+  expect(result.ratio).toBeCloseTo(result.physicalRatio, 2);
+  expect(result.doorSides).toBeGreaterThanOrEqual(2);
+  expect(result.corridor).toBe(true);
+  expect(result.mergedJoin).toBe(true);
+});

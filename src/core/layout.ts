@@ -1,4 +1,4 @@
-import { stairArchitecture, contains } from './architecture';
+import { stairArchitecture, contains, spiralObstructs } from './architecture';
 import {
   MODULE,
   STOREY,
@@ -624,8 +624,10 @@ export function surfaceHeight(layout: Layout, p: Vec, previous: Vec): number | n
       }
     }
   if (rampY !== null) return rampY;
-  for (const hole of [...layout.holes, ...layout.stairClearances])
+  for (const hole of layout.holes)
     if (Math.abs(hole.y - previous.y) < 0.3 && contains(hole, p, 0.13)) return null;
+  for (const shaft of layout.stairClearances)
+    if (Math.abs(shaft.y - previous.y) < 0.3 && spiralObstructs(shaft, p)) return null;
   for (const wall of layout.walls) {
     if (Math.abs(wall.floor * STOREY - previous.y) > 0.3) continue;
     const horizontal = wall.side === 'north' || wall.side === 'south',
