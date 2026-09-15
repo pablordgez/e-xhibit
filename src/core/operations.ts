@@ -1,5 +1,20 @@
 import { compile } from './layout';
 import { uid, wallId, type MuseumDocument, type Room, type Region, type Side } from './model';
+const constructionCodes = new Set([
+  'overlap',
+  'connection',
+  'stairs',
+  'corridor',
+  'furnishing',
+  'clearance',
+]);
+/** Structural edits must be safe before they enter the draft/undo history. */
+export function constructionProblems(before: MuseumDocument, after: MuseumDocument) {
+  const old = new Set(compile(before).issues.map((i) => `${i.code}:${i.target}:${i.message}`));
+  return compile(after).issues.filter(
+    (i) => constructionCodes.has(i.code) && !old.has(`${i.code}:${i.target}:${i.message}`),
+  );
+}
 export function reconcile(doc: MuseumDocument): MuseumDocument {
   const layout = compile(doc),
     valid = new Map(layout.walls.map((w) => [w.id, w]));

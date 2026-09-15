@@ -36,6 +36,7 @@ export default function Visitor({
     ),
     [roomId, setRoomId] = useState(preview?.entrance ?? ''),
     [destination, setDestination] = useState<string | null>(null),
+    [traveling, setTraveling] = useState(false),
     [guide, setGuide] = useState(false),
     [speaking, setSpeaking] = useState(''),
     [page, setPage] = useState(0),
@@ -127,6 +128,13 @@ export default function Visitor({
     setOverlay(action);
     if (action.kind === 'art' && action.narrate) narrate(action.id);
   }
+  const nearbyRooms = doc.connections
+    .filter((c) => c.kind !== 'closed' && (c.a === roomId || c.b === roomId))
+    .map((c) => ({
+      connection: c,
+      room: doc.rooms.find((r) => r.id === (c.a === roomId ? c.b : c.a))!,
+    }))
+    .filter((item) => item.room);
   async function download(id: string) {
     try {
       const a = doc!.assets.find((a) => a.id === id)!;
@@ -159,6 +167,7 @@ export default function Visitor({
           onAction={action}
           onRoom={setRoomId}
           onError={setError}
+          onTravel={setTraveling}
         />
       </Suspense>
       <header className="visitor-header">
@@ -243,7 +252,7 @@ export default function Visitor({
           <small>Floor {(currentRoom?.floor ?? 0) + 1}</small>
         </div>
         <div className="visitor-controls">
-          <button onClick={() => setOverlay({ kind: 'map', id: '' })}>
+          <button disabled={traveling} onClick={() => setOverlay({ kind: 'map', id: '' })}>
             <Map size={17} /> Rooms
           </button>
           <span />
@@ -256,10 +265,38 @@ export default function Visitor({
         </div>
         <div className="visitor-tip">
           {mode === 'walk'
-            ? 'W A S D to move · Click to look · Esc to release'
-            : 'Drag to look · Select a floor marker to move'}
+            ? 'W A S D to move · Mouse to look · Esc to release'
+            : 'Drag to look · Select a floor circle to move here'}
         </div>
       </div>
+      {started && !overlay && mode === 'points' && (
+        <nav className="nearby-destinations" aria-label="Nearby destinations">
+          <span className="eyebrow" role="status">
+            {traveling ? 'MOVING TO YOUR DESTINATION…' : 'CONTINUE TO'}
+          </span>
+          {nearbyRooms.map(({ room }) => (
+            <button
+              key={room.id}
+              disabled={traveling}
+              onClick={() => setDestination(`${room.id}|${Date.now()}`)}
+            >
+              <span aria-hidden="true">
+                {room.floor > (currentRoom?.floor ?? 0)
+                  ? '↗'
+                  : room.floor < (currentRoom?.floor ?? 0)
+                    ? '↘'
+                    : '→'}
+              </span>
+              {room.floor > (currentRoom?.floor ?? 0)
+                ? 'Upstairs · '
+                : room.floor < (currentRoom?.floor ?? 0)
+                  ? 'Downstairs · '
+                  : ''}
+              {room.name}
+            </button>
+          ))}
+        </nav>
+      )}
       {speaking && (
         <div className="now-playing" role="status">
           <Volume2 size={17} />

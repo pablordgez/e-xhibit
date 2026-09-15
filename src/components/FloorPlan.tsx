@@ -22,7 +22,7 @@ import {
   center,
 } from '../core/model';
 import { compile } from '../core/layout';
-import { addRoom, deleteRoom, reconcile } from '../core/operations';
+import { addRoom, deleteRoom, reconcile, constructionProblems } from '../core/operations';
 type Props = {
   doc: MuseumDocument;
   change: (fn: (d: MuseumDocument) => MuseumDocument) => void;
@@ -59,21 +59,32 @@ export default function FloorPlan({
     maxZ = Math.max(0, ...zs) + 1;
   const cols = maxX - minX + 1,
     rows = maxZ - minZ + 1;
+  function applyStructure(next: MuseumDocument) {
+    const problems = constructionProblems(doc, next);
+    if (problems.length) {
+      setError(problems.map((p) => p.message).join(' '));
+      return false;
+    }
+    change(() => reconcile(next));
+    setError('');
+    return true;
+  }
   function place(x: number, z: number) {
     if (tool === 'add') {
       const r = defaultRoom(x, z, floor);
       r.name = `Gallery ${doc.rooms.length + 1}`;
-      change((d) => addRoom(d, r));
-      select(r.id);
-      setTool('select');
+      if (applyStructure(addRoom(doc, r))) {
+        select(r.id);
+        setTool('select');
+      }
     } else if (tool === 'move' && room) {
-      change((d) =>
-        reconcile({
-          ...d,
-          rooms: d.rooms.map((r) => (r.id === room.id ? { ...r, x, z, floor } : r)),
-        }),
-      );
-      setTool('select');
+      if (
+        applyStructure({
+          ...doc,
+          rooms: doc.rooms.map((r) => (r.id === room.id ? { ...r, x, z, floor } : r)),
+        })
+      )
+        setTool('select');
     }
   }
   function connect() {
@@ -88,26 +99,37 @@ export default function FloorPlan({
           })
         : [];
       const connection: Connection = { id: uid(), a: room.id, b: target, kind, route };
-      change((d) =>
-        reconcile({
-          ...d,
-          connections: [
-            ...d.connections.filter(
-              (c) => !((c.a === room.id && c.b === target) || (c.b === room.id && c.a === target)),
-            ),
-            connection,
-          ],
-        }),
-      );
-      setError('');
+      applyStructure({
+        ...doc,
+        connections: [
+          ...doc.connections.filter(
+            (c) => !((c.a === room.id && c.b === target) || (c.b === room.id && c.a === target)),
+          ),
+          connection,
+        ],
+      });
     } catch (e) {
       setError((e as Error).message);
     }
   }
   const mutate = (patch: Partial<Room>) =>
-    change((d) =>
-      reconcile({ ...d, rooms: d.rooms.map((r) => (r.id === selected ? { ...r, ...patch } : r)) }),
-    );
+    applyStructure({
+      ...doc,
+      rooms: doc.rooms.map((r) => (r.id === selected ? { ...r, ...patch } : r)),
+    });
+  const connectionReason = (candidate: Connection['kind']) => {
+    if (!room || !target || candidate === 'corridor') return '';
+    const next = {
+      ...doc,
+      connections: [
+        ...doc.connections.filter(
+          (c) => !([c.a, c.b].includes(room.id) && [c.a, c.b].includes(target)),
+        ),
+        { id: 'connection-preview', a: room.id, b: target, kind: candidate, route: [] },
+      ],
+    };
+    return constructionProblems(doc, next)[0]?.message ?? '';
+  };
   return (
     <div className="workspace-body">
       <div className="plan-area">
@@ -293,8 +315,23 @@ export default function FloorPlan({
                 onChange={(e) => mutate({ kind: e.target.value as Room['kind'] })}
               >
                 <option value="gallery">Gallery</option>
-                <option value="information">Information room</option>
-                <option value="shop">Gift shop</option>
+                {(['information', 'shop'] as const).map((kind) => {
+                  const problem = constructionProblems(doc, {
+                    ...doc,
+                    rooms: doc.rooms.map((r) => (r.id === room.id ? { ...r, kind } : r)),
+                  })[0];
+                  return (
+                    <option
+                      key={kind}
+                      value={kind}
+                      disabled={Boolean(problem)}
+                      title={problem?.message}
+                    >
+                      {kind === 'shop' ? 'Gift shop' : 'Information room'}
+                      {problem ? ' — insufficient clear space' : ''}
+                    </option>
+                  );
+                })}
               </select>
             </label>
             <div className="property-pair">
@@ -365,12 +402,10 @@ export default function FloorPlan({
                       className="icon-button"
                       aria-label="Remove connection"
                       onClick={() =>
-                        change((d) =>
-                          reconcile({
-                            ...d,
-                            connections: d.connections.filter((x) => x.id !== c.id),
-                          }),
-                        )
+                        applyStructure({
+                          ...doc,
+                          connections: doc.connections.filter((x) => x.id !== c.id),
+                        })
                       }
                     >
                       <Minus size={14} />
@@ -394,9 +429,18 @@ export default function FloorPlan({
             <label>
               Connection type
               <select value={kind} onChange={(e) => setKind(e.target.value as Connection['kind'])}>
-                {['door', 'merged', 'closed', 'corridor', 'stairs', 'spiral'].map((k) => (
-                  <option key={k}>{k}</option>
-                ))}
+                {(['door', 'merged', 'closed', 'corridor', 'stairs', 'spiral'] as const).map(
+                  (k) => (
+                    <option
+                      key={k}
+                      value={k}
+                      disabled={Boolean(connectionReason(k))}
+                      title={connectionReason(k)}
+                    >
+                      {k}
+                    </option>
+                  ),
+                )}
               </select>
             </label>
             {kind === 'corridor' && (
@@ -412,8 +456,21 @@ export default function FloorPlan({
                 </small>
               </label>
             )}
-            {error && <p className="error">{error}</p>}
-            <button className="secondary full" disabled={!target} onClick={connect}>
+            {error && (
+              <p className="error" role="alert">
+                {error}
+              </p>
+            )}
+            {connectionReason(kind) && <p className="muted tiny">{connectionReason(kind)}</p>}
+            <p className="muted tiny">
+              Furniture fits around doors and stairs automatically. Connections that cannot fit
+              safely are unavailable.
+            </p>
+            <button
+              className="secondary full"
+              disabled={!target || Boolean(connectionReason(kind))}
+              onClick={connect}
+            >
               Apply connection
             </button>
             <button

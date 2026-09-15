@@ -97,6 +97,7 @@ describe('shared museum compiler', () => {
       for (const b of doc.rooms) {
         if (a.id === b.id) continue;
         const path = avoidOpenings(layout, routeBetween(layout, a.id, b.id));
+        expect(path.length, `${a.id} -> ${b.id} must have a route`).toBeGreaterThan(1);
         for (let i = 1; i < path.length; i++) {
           const p = path[i - 1],
             q = path[i];

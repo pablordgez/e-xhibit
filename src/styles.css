@@ -2665,3 +2665,66 @@ hr {
     padding: 3px;
   }
 }
+.walk-start {
+  position: absolute;
+  z-index: 8;
+  top: 48%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 1rem 1.4rem;
+  background: #fff;
+  color: #171717;
+  border: 1px solid #171717;
+  box-shadow: 0 3px 15px #0002;
+}
+.walk-crosshair {
+  position: absolute;
+  z-index: 7;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  color: white;
+  text-shadow: 0 0 2px #000;
+  font: 24px sans-serif;
+}
+.nearby-destinations {
+  position: absolute;
+  z-index: 6;
+  left: 28px;
+  bottom: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: min(340px, calc(100% - 40px));
+}
+.nearby-destinations > .eyebrow {
+  background: #ffffffeb;
+  color: #333;
+  padding: 4px 8px;
+}
+.nearby-destinations button {
+  min-height: 44px;
+  padding: 10px 14px;
+  text-align: left;
+  background: #fffffff2;
+  border: 1px solid #3333;
+  color: #171717;
+  font-size: 12px;
+}
+.nearby-destinations button:hover {
+  background: #fff;
+  border-color: #333;
+}
+@media (max-width: 700px) {
+  .nearby-destinations {
+    left: 16px;
+    bottom: 155px;
+    max-width: calc(100% - 32px);
+    gap: 4px;
+  }
+  .nearby-destinations button {
+    font-size: 11px;
+  }
+}

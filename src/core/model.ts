@@ -101,11 +101,19 @@ export type Wall = {
 };
 export type WalkArea = { x: number; z: number; w: number; d: number; y: number; roomId?: string };
 export type Ramp = { id: string; points: Vec[]; width: number; kind: 'stairs' | 'spiral' };
+export type Furnishing = WalkArea & {
+  roomId: string;
+  kind: 'stand' | 'shelf';
+  rotation: number;
+  mounted?: boolean;
+};
 export type Layout = {
   walls: Wall[];
   areas: WalkArea[];
   holes: WalkArea[];
+  stairClearances: WalkArea[];
   ramps: Ramp[];
+  furnishings: Furnishing[];
   edges: Map<string, { to: string; points: Vec[] }[]>;
   issues: Issue[];
 };

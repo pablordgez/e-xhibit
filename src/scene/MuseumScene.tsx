@@ -17,9 +17,10 @@ import {
   compile,
   fitExhibit,
   routeBetween,
-  surfaceHeight,
   avoidOpenings,
   corridorBoundaries,
+  walkStep,
+  navigationStops,
 } from '../core/layout';
 import {
   center,
@@ -40,6 +41,7 @@ type Props = {
   onAction: (action: SceneAction) => void;
   onRoom: (id: string) => void;
   onError: (message: string) => void;
+  onTravel: (moving: boolean) => void;
 };
 export default function MuseumScene({
   doc,
@@ -49,11 +51,23 @@ export default function MuseumScene({
   onAction,
   onRoom,
   onError,
+  onTravel,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null),
-    state = useRef({ mode, paused, destination, onAction, onRoom, onError }),
-    [hint, setHint] = useState('');
-  state.current = { mode, paused, destination, onAction, onRoom, onError };
+    state = useRef({ mode, paused, destination, onAction, onRoom, onError, onTravel }),
+    [hint, setHint] = useState(''),
+    [locked, setLocked] = useState(false);
+  state.current = { mode, paused, destination, onAction, onRoom, onError, onTravel };
+  const requestLock = async () => {
+    const canvas = canvasRef.current;
+    try {
+      if (!canvas?.requestPointerLock) throw Error('unavailable');
+      canvas.focus();
+      await canvas.requestPointerLock();
+    } catch {
+      setHint('Mouse capture is unavailable. Use Point & explore, or try Start walking again.');
+    }
+  };
   useEffect(() => {
     const canvas = canvasRef.current!;
     let engine: Engine;
@@ -72,9 +86,15 @@ export default function MuseumScene({
     scene.ambientColor = new Color3(0.75, 0.75, 0.72);
     const layout = compile(doc),
       roomMap = new Map(doc.rooms.map((r) => [r.id, r]));
+    const stops = navigationStops(doc, layout);
     const entrance = roomMap.get(doc.entrance) ?? doc.rooms[0];
+    const spawn =
+      stops
+        .filter((p) => p.roomId === entrance.id)
+        .sort((a, b) => distance(a, center(entrance)) - distance(b, center(entrance)))[0] ??
+      center(entrance);
     let currentRoom = entrance.id,
-      body: Vec = { ...center(entrance), z: center(entrance).z + 1.5 },
+      body: Vec = { ...spawn },
       path: Vec[] = [],
       goal: string | null = null,
       disposed = false;
@@ -119,7 +139,8 @@ export default function MuseumScene({
       );
       mesh.position.set(x, y, z);
       mesh.material = material(color);
-      mesh.isPickable = false;
+      // Architecture occludes interaction with objects in other rooms.
+      mesh.isPickable = true;
       return mesh;
     }
     function subtract(
@@ -401,42 +422,58 @@ export default function MuseumScene({
         plaque.material = pm;
       }
     }
-    for (const room of doc.rooms.filter((r) => r.kind !== 'gallery')) {
-      const c = center(room),
-        rotation = (room.rotation * Math.PI) / 2,
-        x = c.x + (Math.cos(rotation) - Math.sin(rotation)) * 2.35,
-        z = c.z + (Math.sin(rotation) + Math.cos(rotation)) * 2.35;
-      const base = box('stand', x, c.y + 0.6, z, 0.6, 1.2, 0.55, '#444d42'),
-        top = box(
-          room.kind === 'shop' ? 'Download kiosk' : 'Information book',
-          x,
-          c.y + 1.25,
-          z,
-          0.8,
-          0.12,
-          0.65,
-          room.kind === 'shop' ? '#263832' : '#e5d5b6',
-        );
-      base.isPickable = true;
-      top.isPickable = true;
-      base.metadata = top.metadata = { kind: room.kind === 'shop' ? 'shop' : 'book', id: room.id };
-      if (room.kind === 'shop')
+    for (const furnishing of layout.furnishings) {
+      const room = roomMap.get(furnishing.roomId)!,
+        c = center(room),
+        { x, z } = furnishing;
+      if (furnishing.kind === 'stand') {
+        const base = box(
+            'stand',
+            x,
+            c.y + (furnishing.mounted ? 1.05 : 0.6),
+            z,
+            furnishing.w,
+            furnishing.mounted ? 0.45 : 1.2,
+            furnishing.d,
+            '#444d42',
+          ),
+          top = box(
+            room.kind === 'shop' ? 'Download kiosk' : 'Information book',
+            x,
+            c.y + 1.25,
+            z,
+            furnishing.w,
+            0.12,
+            furnishing.d,
+            room.kind === 'shop' ? '#263832' : '#e5d5b6',
+          );
+        base.isPickable = true;
+        top.isPickable = true;
+        base.metadata = top.metadata = {
+          kind: room.kind === 'shop' ? 'shop' : 'book',
+          id: room.id,
+        };
+      } else
         for (let i = 0; i < 2; i++) {
-          box('shelf', c.x - 2.2, c.y + 1 + i * 0.8, c.z, 0.5, 0.08, 2, '#876c4e');
+          box('shelf', x, c.y + 1 + i * 0.8, z, furnishing.w, 0.08, furnishing.d, '#876c4e');
           room.shelves.slice(i * 3, i * 3 + 3).forEach((id, j) => {
             const a = doc.assets.find((a) => a.id === id);
             if (!a) return;
             const mesh = MeshBuilder.CreatePlane(
               'shop-print',
               {
-                width: 0.45,
-                height: (0.45 * a.height) / a.width,
+                width: Math.min(0.35, (0.55 * a.width) / a.height),
+                height: Math.min(0.55, (0.35 * a.height) / a.width),
                 sideOrientation: Mesh.DOUBLESIDE,
               },
               scene,
             );
-            mesh.position.set(c.x - 2.15, c.y + 1.3 + i * 0.8, c.z - 0.65 + j * 0.65);
-            mesh.rotation.y = -Math.PI / 2;
+            mesh.position.set(
+              x + Math.cos(furnishing.rotation) * (j - 1) * 0.45,
+              c.y + 1.32 + i * 0.8,
+              z + Math.sin(furnishing.rotation) * (j - 1) * 0.45,
+            );
+            mesh.rotation.y = furnishing.rotation;
             mesh.isPickable = false;
             const material = new StandardMaterial('shop-print-material', scene);
             material.specularColor = Color3.Black();
@@ -454,16 +491,24 @@ export default function MuseumScene({
         }
     }
     const markers: Mesh[] = [];
-    for (const room of doc.rooms) {
-      const c = center(room),
-        marker = MeshBuilder.CreateTorus(
-          'Go to ' + room.name,
-          { diameter: 0.48, thickness: 0.035, tessellation: 20 },
-          scene,
-        );
-      marker.position.set(c.x + 2.4, c.y + 0.025, c.z);
-      marker.material = material('#bd633e');
-      marker.metadata = { kind: 'move', id: room.id };
+    for (const stop of stops) {
+      const marker = MeshBuilder.CreateCylinder(
+        'Move here',
+        { diameter: 0.95, height: 0.015, tessellation: 40 },
+        scene,
+      );
+      marker.position.set(stop.x, stop.y + 0.025, stop.z);
+      marker.material = material('#f4f0e8');
+      marker.metadata = { kind: 'move', id: stop.roomId, point: stop };
+      const ring = MeshBuilder.CreateTorus(
+        'destination outline',
+        { diameter: 0.85, thickness: 0.035, tessellation: 40 },
+        scene,
+      );
+      ring.parent = marker;
+      ring.position.y = 0.015;
+      ring.material = material('#585650');
+      ring.isPickable = false;
       markers.push(marker);
     }
     const keys = new Set<string>();
@@ -491,22 +536,27 @@ export default function MuseumScene({
     };
     const keyup = (e: KeyboardEvent) => keys.delete(e.code);
     const blur = () => keys.clear();
-    function startRoom(id: string) {
+    function startRoom(id: string, destination?: Vec) {
       const r = roomMap.get(id);
-      if (!r || state.current.paused) return;
-      const current = roomMap.get(currentRoom)!;
+      if (!r || state.current.paused || path.length) return;
       const points = routeBetween(layout, currentRoom, id);
       if (currentRoom !== id && !points.length) return;
-      const target = { ...center(r), x: center(r).x + 2.4 };
-      path = avoidOpenings(layout, [
-        { ...body },
-        ...(points.length ? points : [center(current)]),
-        target,
-      ]);
+      const target =
+        destination ??
+        stops
+          .filter((p) => p.roomId === id)
+          .sort((a, b) => distance(a, center(r)) - distance(b, center(r)))[0];
+      if (!target) return;
+      path = avoidOpenings(layout, [{ ...body }, ...points, target]);
       goal = id;
+      state.current.onTravel(path.length > 0);
+      if (!path.length) setHint('This destination is blocked. Choose another stop or use Rooms.');
     }
     const down = (e: PointerEvent) => {
       if (state.current.paused) return;
+      canvas.focus();
+      moved = false;
+      if (state.current.mode === 'walk') return;
       dragging = true;
       moved = false;
       lastX = e.clientX;
@@ -515,7 +565,7 @@ export default function MuseumScene({
     };
     const move = (e: PointerEvent) => {
       if (state.current.paused) return;
-      if (document.pointerLockElement === canvas || dragging) {
+      if (document.pointerLockElement === canvas || (state.current.mode === 'points' && dragging)) {
         const dx = document.pointerLockElement === canvas ? e.movementX : e.clientX - lastX,
           dy = document.pointerLockElement === canvas ? e.movementY : e.clientY - lastY;
         if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
@@ -527,31 +577,43 @@ export default function MuseumScene({
     };
     const up = (e: PointerEvent) => {
       dragging = false;
-      if (state.current.paused || moved) return;
-      const bounds = canvas.getBoundingClientRect(),
-        scaleX = engine.getRenderWidth() / bounds.width,
-        scaleY = engine.getRenderHeight() / bounds.height;
+      if (state.current.paused || (state.current.mode === 'points' && moved)) return;
+      if (state.current.mode === 'walk' && document.pointerLockElement !== canvas) {
+        void requestLock();
+        return;
+      }
+      const bounds = canvas.getBoundingClientRect();
+      // Babylon accepts CSS pixels and applies hardware scaling internally.
       const pick = scene.pick(
-        document.pointerLockElement === canvas
-          ? engine.getRenderWidth() / 2
-          : (e.clientX - bounds.left) * scaleX,
-        document.pointerLockElement === canvas
-          ? engine.getRenderHeight() / 2
-          : (e.clientY - bounds.top) * scaleY,
+        document.pointerLockElement === canvas ? bounds.width / 2 : e.clientX - bounds.left,
+        document.pointerLockElement === canvas ? bounds.height / 2 : e.clientY - bounds.top,
       );
       const meta = pick?.pickedMesh?.metadata;
       if (meta?.kind === 'move') {
-        startRoom(meta.id);
+        startRoom(meta.id, meta.point);
       } else if (meta) {
         path = [];
+        goal = null;
+        state.current.onTravel(false);
         state.current.onAction(meta);
-      } else if (state.current.mode === 'walk') {
-        void canvas.requestPointerLock?.();
-      } else {
-        setHint('Use the room list or select a copper floor marker to move.');
+      } else if (state.current.mode === 'points') {
+        setHint('Select a filled floor circle to move here, or choose a destination in Rooms.');
         setTimeout(() => setHint(''), 4000);
       }
     };
+    const lockChange = () => {
+      setLocked(document.pointerLockElement === canvas);
+      dragging = false;
+      moved = false;
+      keys.clear();
+    };
+    const pointerCancel = () => {
+      dragging = false;
+      moved = false;
+      keys.clear();
+    };
+    document.addEventListener('pointerlockchange', lockChange);
+    canvas.addEventListener('pointercancel', pointerCancel);
     canvas.addEventListener('pointerdown', down);
     canvas.addEventListener('pointermove', move);
     canvas.addEventListener('pointerup', up);
@@ -578,8 +640,10 @@ export default function MuseumScene({
       }
       if (s.mode !== lastMode) {
         path = [];
+        goal = null;
+        s.onTravel(false);
         keys.clear();
-        if (document.pointerLockElement === canvas) document.exitPointerLock();
+        if (s.mode !== 'walk' && document.pointerLockElement === canvas) document.exitPointerLock();
         lastMode = s.mode;
       }
       if (s.destination !== lastDestination) {
@@ -611,9 +675,10 @@ export default function MuseumScene({
           if (!path.length && goal) {
             currentRoom = goal;
             s.onRoom(currentRoom);
+            s.onTravel(false);
             goal = null;
           }
-        } else if (s.mode === 'walk') {
+        } else if (s.mode === 'walk' && document.pointerLockElement === canvas) {
           const forward =
               (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
               (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0),
@@ -621,20 +686,7 @@ export default function MuseumScene({
               (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
               (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
           if (forward || right) {
-            const scale = (dt * 2.4) / Math.hypot(forward, right),
-              dx =
-                (Math.sin(camera.rotation.y) * forward + Math.cos(camera.rotation.y) * right) *
-                scale,
-              dz =
-                (Math.cos(camera.rotation.y) * forward - Math.sin(camera.rotation.y) * right) *
-                scale;
-            for (const next of [
-              { ...body, x: body.x + dx },
-              { ...body, z: body.z + dz },
-            ]) {
-              const y = surfaceHeight(layout, next, body);
-              if (y !== null) body = { ...next, y };
-            }
+            body = walkStep(layout, body, camera.rotation.y, forward, right, dt);
             const found = doc.rooms.find(
               (r) =>
                 Math.abs(r.floor * STOREY - body.y) < 0.3 &&
@@ -650,7 +702,13 @@ export default function MuseumScene({
       }
       camera.position.set(body.x, body.y + 1.65, body.z);
       markers.forEach((m) =>
-        m.setEnabled(s.mode === 'points' && Math.abs(m.position.y - body.y) < 0.2),
+        m.setEnabled(
+          s.mode === 'points' &&
+            !path.length &&
+            Math.abs(m.position.y - body.y) < 0.2 &&
+            distance(body, m.position) > 0.8 &&
+            distance(body, m.position) < 7.5,
+        ),
       );
       const now = performance.now();
       if (now - lastUpdate > 800) {
@@ -712,6 +770,8 @@ export default function MuseumScene({
     return () => {
       disposed = true;
       keys.clear();
+      document.removeEventListener('pointerlockchange', lockChange);
+      canvas.removeEventListener('pointercancel', pointerCancel);
       if (document.pointerLockElement === canvas) document.exitPointerLock();
       canvas.removeEventListener('pointerdown', down);
       canvas.removeEventListener('pointermove', move);
@@ -737,6 +797,16 @@ export default function MuseumScene({
         <div className="scene-hint" role="status">
           {hint}
         </div>
+      )}
+      {mode === 'walk' && !paused && !locked && (
+        <button className="walk-start" onClick={() => void requestLock()}>
+          Start walking · WASD + mouse
+        </button>
+      )}
+      {mode === 'walk' && !paused && locked && (
+        <span className="walk-crosshair" aria-hidden="true">
+          +
+        </span>
       )}
     </>
   );
