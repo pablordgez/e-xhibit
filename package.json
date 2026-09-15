@@ -1,0 +1,42 @@
+{
+  "name": "e-xhibit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "preview": "vite preview --host 0.0.0.0",
+    "worker:dev": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "typecheck": "tsc -b",
+    "worker:check": "wrangler deploy --dry-run",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@babylonjs/core": "^8.0.0",
+    "@supabase/supabase-js": "^2.57.0",
+    "aws4fetch": "^1.0.20",
+    "lucide-react": "^0.468.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260911.1",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "prettier": "^3.9.6",
+    "typescript": "~5.9.2",
+    "vite": "^6.3.5",
+    "vitest": "5.0.0",
+    "wrangler": "^4.34.0"
+  }
+}
