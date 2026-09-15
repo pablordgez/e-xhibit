@@ -56,7 +56,7 @@ describe('walking and automatic furnishing', () => {
       doc.regions = [];
       const layout = compile(doc);
       expect(layout.issues).toEqual([]);
-      expect(layout.furnishings.filter((f) => f.roomId === 'shop')).toHaveLength(2);
+      expect(layout.furnishings.filter((f) => f.roomId === 'shop')).toHaveLength(3);
       for (const f of layout.furnishings) {
         expect(surfaceHeight(layout, f, f)).toBeNull();
         for (const wall of layout.walls.filter((w) => w.roomId === f.roomId && w.opening)) {

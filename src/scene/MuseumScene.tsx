@@ -1,3 +1,5 @@
+import { surfacePlates, contains } from '../core/architecture';
+import { buildStairs, buildFurnishings, buildCircularSlab, type TextureSlot } from './details';
 import { useEffect, useRef, useState } from 'react';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
@@ -143,52 +145,22 @@ export default function MuseumScene({
       mesh.isPickable = true;
       return mesh;
     }
-    function subtract(
-      rect: { x: number; z: number; w: number; d: number },
-      hole: { x: number; z: number; w: number; d: number },
-    ) {
-      const l = Math.max(rect.x - rect.w / 2, hole.x - hole.w / 2),
-        r = Math.min(rect.x + rect.w / 2, hole.x + hole.w / 2),
-        t = Math.max(rect.z - rect.d / 2, hole.z - hole.d / 2),
-        b = Math.min(rect.z + rect.d / 2, hole.z + hole.d / 2);
-      if (l >= r || t >= b) return [rect];
-      return [
-        { x: (rect.x - rect.w / 2 + l) / 2, z: rect.z, w: l - (rect.x - rect.w / 2), d: rect.d },
-        { x: (r + rect.x + rect.w / 2) / 2, z: rect.z, w: rect.x + rect.w / 2 - r, d: rect.d },
-        {
-          x: (l + r) / 2,
-          z: (rect.z - rect.d / 2 + t) / 2,
-          w: r - l,
-          d: t - (rect.z - rect.d / 2),
-        },
-        { x: (l + r) / 2, z: (b + rect.z + rect.d / 2) / 2, w: r - l, d: rect.z + rect.d / 2 - b },
-      ].filter((p) => p.w > 0.01 && p.d > 0.01);
-    }
     for (const area of layout.areas) {
       const room = roomMap.get(area.roomId ?? '');
-      let plates = [area];
-      if (room) {
-        for (const c of doc.connections.filter(
-          (c) => ['spiral', 'stairs'].includes(c.kind) && (c.a === room.id || c.b === room.id),
-        )) {
-          const other = roomMap.get(c.a === room.id ? c.b : c.a)!;
-          if (!other || other.floor > room.floor) continue;
-          const p = center(room),
-            o = center(other),
-            hole =
-              c.kind === 'spiral'
-                ? { x: p.x, z: p.z, w: 4.2, d: 4.2 }
-                : {
-                    x: p.x + Math.sign(o.x - p.x) * 1.5,
-                    z: p.z + Math.sign(o.z - p.z) * 1.5,
-                    w: p.x !== o.x ? 3.1 : 2,
-                    d: p.z !== o.z ? 3.1 : 2,
-                  };
-          plates = plates.flatMap((rect) =>
-            subtract(rect, hole).map((part) => ({ ...area, ...part })),
-          );
-        }
-      }
+      if (
+        buildCircularSlab(
+          area,
+          layout.holes,
+          scene,
+          box,
+          material,
+          room?.finish === 'stone' ? '#c2bdb0' : '#bba68a',
+          false,
+          room?.finish === 'wood',
+        )
+      )
+        continue;
+      const plates = surfacePlates(area, layout.holes);
       for (const plate of plates) {
         box(
           'floor',
@@ -204,6 +176,50 @@ export default function MuseumScene({
           for (let z = plate.z - plate.d / 2 + 0.4; z < plate.z + plate.d / 2; z += 0.4)
             box('wood-joint', plate.x, area.y + 0.003, z, plate.w, 0.002, 0.008, '#a7947d');
         }
+      }
+    }
+    for (const area of layout.areas) {
+      const room = roomMap.get(area.roomId ?? '');
+      const ceilingY = area.y + HEIGHT;
+      if (
+        !buildCircularSlab(
+          { ...area, y: ceilingY },
+          layout.ceilingHoles,
+          scene,
+          box,
+          material,
+          room?.color ?? '#eeece5',
+          true,
+        )
+      )
+        for (const plate of surfacePlates({ ...area, y: ceilingY }, layout.ceilingHoles))
+          box(
+            'ceiling',
+            plate.x,
+            ceilingY + 0.06,
+            plate.z,
+            plate.w,
+            0.12,
+            plate.d,
+            room?.color ?? '#eeece5',
+          );
+      const lights = room
+        ? [
+            [-1.85, -1.85],
+            [1.85, -1.85],
+            [-1.85, 1.85],
+            [1.85, 1.85],
+          ]
+        : [[0, 0]];
+      for (const [x, z] of lights) {
+        const p = { x: area.x + x, y: ceilingY, z: area.z + z };
+        if (layout.ceilingHoles.some((h) => Math.abs(h.y - ceilingY) < 0.01 && contains(h, p, 0.5)))
+          continue;
+        box('recessed-light-trim', p.x, p.y - 0.025, p.z, 0.85, 0.045, 0.18, '#454941');
+        const glow = box('ceiling-light', p.x, p.y - 0.05, p.z, 0.73, 0.015, 0.095, '#fff1cc');
+        const emissive = material('#fff1cc');
+        emissive.emissiveColor = new Color3(0.95, 0.86, 0.65);
+        glow.material = emissive;
       }
     }
     for (const wall of corridorBoundaries(layout))
@@ -256,42 +272,8 @@ export default function MuseumScene({
           '#d9d5c9',
         );
     }
-    for (const ramp of layout.ramps) {
-      for (let i = 1; i < ramp.points.length; i++) {
-        const a = ramp.points[i - 1],
-          b = ramp.points[i],
-          len = distance(a, b),
-          steps = Math.max(1, Math.ceil(Math.abs(b.y - a.y) / 0.15));
-        for (let n = 0; n < steps; n++) {
-          const t = (n + 0.5) / steps;
-          const tread = box(
-            'stair-tread',
-            a.x + (b.x - a.x) * t,
-            a.y + (b.y - a.y) * t - 0.07,
-            a.z + (b.z - a.z) * t,
-            ramp.width,
-            0.14,
-            len / steps + 0.03,
-            '#b6a184',
-          );
-          tread.rotation.y = Math.atan2(b.x - a.x, b.z - a.z);
-        }
-      }
-      if (ramp.kind === 'spiral') {
-        const mid = ramp.points[Math.floor(ramp.points.length / 2)],
-          base = Math.min(...ramp.points.map((p) => p.y));
-        box('stair-pole', mid.x + 1.5, base + 2, mid.z, 0.14, 4, 0.14, '#373e36');
-      }
-    }
-    const textures: {
-      mesh: Mesh;
-      material: StandardMaterial;
-      assetId: string;
-      size: string;
-      loaded: boolean;
-      pending: boolean;
-      last: number;
-    }[] = [];
+    buildStairs(layout, scene, box, material);
+    const textures: TextureSlot[] = [];
     const frameColors: Record<string, string> = {
       none: '#eee9df',
       black: '#292b28',
@@ -422,74 +404,7 @@ export default function MuseumScene({
         plaque.material = pm;
       }
     }
-    for (const furnishing of layout.furnishings) {
-      const room = roomMap.get(furnishing.roomId)!,
-        c = center(room),
-        { x, z } = furnishing;
-      if (furnishing.kind === 'stand') {
-        const base = box(
-            'stand',
-            x,
-            c.y + (furnishing.mounted ? 1.05 : 0.6),
-            z,
-            furnishing.w,
-            furnishing.mounted ? 0.45 : 1.2,
-            furnishing.d,
-            '#444d42',
-          ),
-          top = box(
-            room.kind === 'shop' ? 'Download kiosk' : 'Information book',
-            x,
-            c.y + 1.25,
-            z,
-            furnishing.w,
-            0.12,
-            furnishing.d,
-            room.kind === 'shop' ? '#263832' : '#e5d5b6',
-          );
-        base.isPickable = true;
-        top.isPickable = true;
-        base.metadata = top.metadata = {
-          kind: room.kind === 'shop' ? 'shop' : 'book',
-          id: room.id,
-        };
-      } else
-        for (let i = 0; i < 2; i++) {
-          box('shelf', x, c.y + 1 + i * 0.8, z, furnishing.w, 0.08, furnishing.d, '#876c4e');
-          room.shelves.slice(i * 3, i * 3 + 3).forEach((id, j) => {
-            const a = doc.assets.find((a) => a.id === id);
-            if (!a) return;
-            const mesh = MeshBuilder.CreatePlane(
-              'shop-print',
-              {
-                width: Math.min(0.35, (0.55 * a.width) / a.height),
-                height: Math.min(0.55, (0.35 * a.height) / a.width),
-                sideOrientation: Mesh.DOUBLESIDE,
-              },
-              scene,
-            );
-            mesh.position.set(
-              x + Math.cos(furnishing.rotation) * (j - 1) * 0.45,
-              c.y + 1.32 + i * 0.8,
-              z + Math.sin(furnishing.rotation) * (j - 1) * 0.45,
-            );
-            mesh.rotation.y = furnishing.rotation;
-            mesh.isPickable = false;
-            const material = new StandardMaterial('shop-print-material', scene);
-            material.specularColor = Color3.Black();
-            mesh.material = material;
-            textures.push({
-              mesh,
-              material,
-              assetId: id,
-              size: '',
-              loaded: false,
-              pending: false,
-              last: 0,
-            });
-          });
-        }
-    }
+    buildFurnishings(doc, layout, scene, box, material, textures);
     const markers: Mesh[] = [];
     for (const stop of stops) {
       const marker = MeshBuilder.CreateCylinder(

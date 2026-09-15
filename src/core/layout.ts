@@ -1,3 +1,4 @@
+import { stairArchitecture, contains } from './architecture';
 import {
   MODULE,
   STOREY,
@@ -315,28 +316,7 @@ export function compile(doc: MuseumDocument): Layout {
     }
   if (doc.unplaced.length)
     issue('unplaced', `${doc.unplaced.length} exhibit(s) need placement or removal.`, 'unplaced');
-  const holes: WalkArea[] = [];
-  for (const c of doc.connections.filter((c) => c.kind === 'spiral' || c.kind === 'stairs')) {
-    const a = roomById.get(c.a),
-      b = roomById.get(c.b);
-    if (!a || !b || !ramps.some((r) => r.id === c.id)) continue;
-    const high = a.floor > b.floor ? a : b,
-      low = a.floor > b.floor ? b : a,
-      p = center(high),
-      o = center(low);
-    holes.push(
-      c.kind === 'spiral'
-        ? { ...p, w: 4.2, d: 4.2, roomId: high.id }
-        : {
-            x: p.x + Math.sign(o.x - p.x) * 1.5,
-            z: p.z + Math.sign(o.z - p.z) * 1.5,
-            y: p.y,
-            w: p.x !== o.x ? 3.1 : 2,
-            d: p.z !== o.z ? 3.1 : 2,
-            roomId: high.id,
-          },
-    );
-  }
+  const { holes, ceilingHoles, structures } = stairArchitecture(doc, ramps);
   const furnishings: Furnishing[] = [];
   // Reserve doors, stair flights and landings before furnishing a room. These
   // footprints are shared by rendering, walking and guided navigation.
@@ -374,15 +354,35 @@ export function compile(doc: MuseumDocument): Layout {
     const p = center(room);
     const fits = (f: Furnishing) =>
       ![...reserved, ...furnishings].some((r) => intersect(f, r, -0.12));
-    // Compact stands fit the corners even around a central spiral opening.
+    // A real counter or kiosk in ordinary rooms; compact wall units in stair rooms.
     const stands = [0, 1, 2, 3].map((i): Furnishing => {
       const angle = ((i + room.rotation) * Math.PI) / 2;
       return {
-        x: p.x + (Math.cos(angle) - Math.sin(angle)) * 2.5,
-        z: p.z + (Math.sin(angle) + Math.cos(angle)) * 2.5,
+        x:
+          p.x +
+          Math.cos(angle) * (room.kind === 'information' ? 1.9 : 2.3) +
+          Math.sin(angle) * 2.25,
+        z:
+          p.z -
+          Math.sin(angle) * (room.kind === 'information' ? 1.9 : 2.3) +
+          Math.cos(angle) * 2.25,
         y: p.y,
-        w: 0.5,
-        d: 0.5,
+        w:
+          (i + room.rotation) % 2
+            ? room.kind === 'information'
+              ? 0.9
+              : 0.6
+            : room.kind === 'information'
+              ? 1.4
+              : 0.7,
+        d:
+          (i + room.rotation) % 2
+            ? room.kind === 'information'
+              ? 1.4
+              : 0.7
+            : room.kind === 'information'
+              ? 0.9
+              : 0.6,
         kind: 'stand',
         roomId: room.id,
         rotation: angle,
@@ -393,6 +393,7 @@ export function compile(doc: MuseumDocument): Layout {
     );
     const wallStands = walls
       .filter((w) => w.roomId === room.id)
+      .sort((a, b) => (spiralRoom ? Number(b.side === 'east') - Number(a.side === 'east') : 0))
       .flatMap((wall) => {
         const [dx, dz] = sideDelta[wall.side];
         return [-1.4, 1.4, 0].map((along): Furnishing => ({
@@ -404,7 +405,7 @@ export function compile(doc: MuseumDocument): Layout {
           mounted: true,
           roomId: room.id,
           kind: 'stand',
-          rotation: dx ? Math.PI / 2 : 0,
+          rotation: Math.atan2(dx, dz),
         }));
       });
     // A spiral leaves a narrow circulation ring: use a wall-mounted information
@@ -419,7 +420,7 @@ export function compile(doc: MuseumDocument): Layout {
       );
     if (room.kind !== 'shop') continue;
     const candidates = walls
-      .filter((w) => w.roomId === room.id)
+      .filter((w) => w.roomId === room.id && !doc.regions.some((r) => r.wall === w.id && r.assetId))
       .flatMap((wall) => {
         const [dx, dz] = sideDelta[wall.side];
         return [-1.8, 1.8, 0].map((along): Furnishing => ({
@@ -430,17 +431,70 @@ export function compile(doc: MuseumDocument): Layout {
           d: dz ? 0.2 : 1.4,
           roomId: room.id,
           kind: 'shelf',
-          rotation: dx ? Math.PI / 2 : 0,
+          wall: wall.id,
+          rotation: Math.atan2(dx, dz),
         }));
       });
-    const shelf = candidates.find(fits);
-    if (shelf) furnishings.push(shelf);
-    else
+    let shelfCount = 0;
+    const shelfWalls = new Set<string>();
+    for (const spread of [true, false])
+      for (const shelf of candidates) {
+        if (shelfCount >= (spiralRoom ? 2 : 3)) break;
+        if (spread && shelfWalls.has(shelf.wall!)) continue;
+        if (fits(shelf)) {
+          furnishings.push(shelf);
+          shelfWalls.add(shelf.wall!);
+          shelfCount++;
+        }
+      }
+    if (!shelfCount)
       issue(
         'furnishing',
         `${room.name} has no safe wall space for its shelves. Use a gallery here or keep a wall section clear of stairs and entrances.`,
         room.id,
       );
+    // Keep the central viewing position and door approaches open. Freestanding
+    // displays enrich ordinary shops; optional pieces never crowd stair rooms.
+    if (!spiralRoom) {
+      const corners = [
+        [-1.8, 1.8],
+        [1.8, 1.8],
+        [-1.8, -1.8],
+        [1.8, -1.8],
+      ];
+      const table = corners
+        .map(([x, z]): Furnishing => ({
+          x: p.x + x,
+          z: p.z + z,
+          y: p.y,
+          w: 1.1,
+          d: 0.85,
+          kind: 'table',
+          roomId: room.id,
+          rotation: 0,
+        }))
+        .find(fits);
+      if (table) furnishings.push(table);
+      const plant = [
+        ...corners.map(([x, z]) => [x * 1.4, z * 1.4]),
+        [-2.3, 0],
+        [2.3, 0],
+        [0, -2.3],
+        [0, 2.3],
+      ]
+        .map(([x, z]): Furnishing => ({
+          x: p.x + x,
+          z: p.z + z,
+          y: p.y,
+          w: 0.42,
+          d: 0.42,
+          kind: 'plant',
+          roomId: room.id,
+          rotation: 0,
+        }))
+        .find(fits);
+      if (plant) furnishings.push(plant);
+    }
   }
   const stairClearances = doc.connections
     .filter((c) => c.kind === 'spiral' && ramps.some((r) => r.id === c.id))
@@ -448,9 +502,20 @@ export function compile(doc: MuseumDocument): Layout {
       const a = roomById.get(c.a)!,
         b = roomById.get(c.b)!;
       const low = a.floor < b.floor ? a : b;
-      return { ...center(low), w: 4.2, d: 4.2, roomId: low.id };
+      return { ...center(low), w: 4.1, d: 4.1, roomId: low.id, shape: 'circle' as const };
     });
-  const layout = { walls, areas, holes, stairClearances, ramps, edges, furnishings, issues };
+  const layout = {
+    walls,
+    areas,
+    holes,
+    ceilingHoles,
+    structures,
+    stairClearances,
+    ramps,
+    edges,
+    furnishings,
+    issues,
+  };
   const destinations = new Map(navigationStops(doc, layout).map((p) => [p.roomId, p]));
   // Room routes must start and end at viewing positions, never at the pole of a spiral.
   for (const [id, links] of edges)
@@ -534,6 +599,9 @@ export function surfaceHeight(layout: Layout, p: Vec, previous: Vec): number | n
       Math.abs(p.z - f.z) < f.d / 2 + 0.23
     )
       return null;
+  for (const solid of layout.structures)
+    if (previous.y + 1.8 > solid.y && previous.y < solid.y + solid.h && contains(solid, p, 0.16))
+      return null;
   // Ramp samples are continuous collision surfaces; the visible treads are decorative.
   let rampY: number | null = null,
     best = Infinity;
@@ -557,12 +625,7 @@ export function surfaceHeight(layout: Layout, p: Vec, previous: Vec): number | n
     }
   if (rampY !== null) return rampY;
   for (const hole of [...layout.holes, ...layout.stairClearances])
-    if (
-      Math.abs(hole.y - previous.y) < 0.3 &&
-      Math.abs(p.x - hole.x) < hole.w / 2 + 0.13 &&
-      Math.abs(p.z - hole.z) < hole.d / 2 + 0.13
-    )
-      return null;
+    if (Math.abs(hole.y - previous.y) < 0.3 && contains(hole, p, 0.13)) return null;
   for (const wall of layout.walls) {
     if (Math.abs(wall.floor * STOREY - previous.y) > 0.3) continue;
     const horizontal = wall.side === 'north' || wall.side === 'south',
@@ -589,8 +652,7 @@ export function avoidOpenings(layout: Layout, points: Vec[]): Vec[] {
       for (const hole of [...layout.holes, ...layout.stairClearances])
         if (
           Math.abs(hole.y - end.y) < 0.1 &&
-          Math.abs(end.x - hole.x) < hole.w / 2 + 0.18 &&
-          Math.abs(end.z - hole.z) < hole.d / 2 + 0.18 &&
+          contains(hole, end, 0.18) &&
           surfaceHeight(layout, end, end) === null
         )
           end = { ...end, x: hole.x + hole.w / 2 + 0.3 };
@@ -609,8 +671,7 @@ export function avoidOpenings(layout: Layout, points: Vec[]): Vec[] {
       output.push(end);
       continue;
     }
-    const inside = (p: Vec, h: WalkArea) =>
-      Math.abs(p.x - h.x) < h.w / 2 + 0.18 && Math.abs(p.z - h.z) < h.d / 2 + 0.18;
+    const inside = (p: Vec, h: WalkArea) => contains(h, p, 0.18);
     // Central room nodes move to a safe landing outside an upper-floor hole.
     for (const h of holes)
       if (inside(end, h) && surfaceHeight(layout, end, end) === null)
@@ -630,13 +691,19 @@ export function avoidOpenings(layout: Layout, points: Vec[]): Vec[] {
       start,
       end,
       ...holes.flatMap((h) =>
-        [-1, 1].flatMap((x) =>
-          [-1, 1].map((z) => ({
-            x: h.x + x * (h.w / 2 + 0.3),
-            y: h.y,
-            z: h.z + z * (h.d / 2 + 0.3),
-          })),
-        ),
+        h.shape === 'circle'
+          ? Array.from({ length: 12 }, (_, i) => ({
+              x: h.x + Math.cos((i * Math.PI) / 6) * (h.w / 2 + 0.3),
+              y: h.y,
+              z: h.z + Math.sin((i * Math.PI) / 6) * (h.d / 2 + 0.3),
+            }))
+          : [-1, 1].flatMap((x) =>
+              [-1, 1].map((z) => ({
+                x: h.x + x * (h.w / 2 + 0.3),
+                y: h.y,
+                z: h.z + z * (h.d / 2 + 0.3),
+              })),
+            ),
       ),
     ];
     const costs = nodes.map(() => Infinity),
@@ -688,6 +755,31 @@ export function walkStep(
   let body = { ...position };
   const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.06));
   for (let i = 0; i < steps; i++) {
+    const desired = { ...body, x: body.x + dx / steps, z: body.z + dz / steps };
+    const height = surfaceHeight(layout, desired, body);
+    if (height !== null) {
+      body = { ...desired, y: height };
+      continue;
+    }
+    // Slide around the actual round shaft instead of snagging on an invisible
+    // square or dropping an entire movement axis at its edge.
+    const circle = [...layout.holes, ...layout.stairClearances].find(
+      (h) => h.shape === 'circle' && Math.abs(h.y - body.y) < 0.3 && contains(h, desired, 0.13),
+    );
+    if (circle) {
+      const radius = circle.w / 2 + 0.135,
+        angle = Math.atan2(desired.z - circle.z, desired.x - circle.x);
+      const slid = {
+        x: circle.x + Math.cos(angle) * radius,
+        y: body.y,
+        z: circle.z + Math.sin(angle) * radius,
+      };
+      const y = surfaceHeight(layout, slid, body);
+      if (y !== null && distance(slid, body) < 0.09) {
+        body = { ...slid, y };
+        continue;
+      }
+    }
     for (const axis of ['x', 'z'] as const) {
       const next = { ...body, [axis]: body[axis] + (axis === 'x' ? dx : dz) / steps };
       const y = surfaceHeight(layout, next, body);

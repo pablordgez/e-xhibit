@@ -217,6 +217,7 @@ export default function FloorPlan({
                   backgroundColor: r.id === selected ? undefined : r.color,
                 }}
                 title={r.name}
+                aria-label={r.name}
               >
                 <span className="room-number">
                   {String(doc.rooms.indexOf(r) + 1).padStart(2, '0')}

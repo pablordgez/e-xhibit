@@ -99,18 +99,30 @@ export type Wall = {
   length: number;
   opening: boolean;
 };
-export type WalkArea = { x: number; z: number; w: number; d: number; y: number; roomId?: string };
+export type WalkArea = {
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+  y: number;
+  roomId?: string;
+  shape?: 'circle';
+};
+export type Structure = WalkArea & { h: number; color: string; name: string };
 export type Ramp = { id: string; points: Vec[]; width: number; kind: 'stairs' | 'spiral' };
 export type Furnishing = WalkArea & {
   roomId: string;
-  kind: 'stand' | 'shelf';
+  kind: 'stand' | 'shelf' | 'table' | 'plant';
   rotation: number;
   mounted?: boolean;
+  wall?: string;
 };
 export type Layout = {
   walls: Wall[];
   areas: WalkArea[];
   holes: WalkArea[];
+  ceilingHoles: WalkArea[];
+  structures: Structure[];
   stairClearances: WalkArea[];
   ramps: Ramp[];
   furnishings: Furnishing[];
