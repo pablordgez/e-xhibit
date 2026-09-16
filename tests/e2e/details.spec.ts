@@ -13,11 +13,7 @@ async function aimAt(page: Page, name: string, asset?: string) {
       const target = scene.meshes.find(
         (m: any) => m.name === name && (!asset || m.metadata?.id === asset),
       ).position;
-      camera.rotation.y = Math.atan2(target.x - camera.position.x, target.z - camera.position.z);
-      camera.rotation.x = -Math.atan2(
-        target.y - camera.position.y,
-        Math.hypot(target.x - camera.position.x, target.z - camera.position.z),
-      );
+      camera.setTarget(target);
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       );

@@ -39,11 +39,7 @@ async function clickStop(
         );
       for (const mesh of candidates) {
         const p = mesh.position;
-        camera.rotation.y = Math.atan2(p.x - camera.position.x, p.z - camera.position.z);
-        camera.rotation.x = -Math.atan2(
-          p.y - camera.position.y,
-          Math.hypot(p.x - camera.position.x, p.z - camera.position.z),
-        );
+        camera.setTarget(p);
         await new Promise<void>((r) =>
           requestAnimationFrame(() => requestAnimationFrame(() => r())),
         );
@@ -133,8 +129,8 @@ test('the shop and spiral staircase can be visited using only floor circles', as
     const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
     const { Engine } = await import(module);
     const camera = Engine.LastCreatedScene.activeCamera;
-    camera.rotation.y = -Math.PI / 2;
-    camera.rotation.x = 0.6;
+    camera.rotation.y = Math.PI / 2;
+    camera.rotation.x = -0.6;
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
     );

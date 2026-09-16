@@ -21,10 +21,29 @@ test('WASD moves on both axes and FPS mouse look works without dragging', async 
   await page.getByRole('button', { name: /Start walking/ }).click();
   await expect.poll(() => page.evaluate(() => Boolean(document.pointerLockElement))).toBe(true);
   for (const [key, axis, direction] of [
-    ['a', 'x', 1],
-    ['d', 'x', -1],
+    ['a', 'x', -1],
+    ['d', 'x', 1],
     ['w', 'z', -1],
     ['s', 'z', 1],
+  ] as const) {
+    const before = (await camera(page))!;
+    await page.keyboard.down(key);
+    await expect
+      .poll(async () => ((await camera(page))![axis] - before[axis]) * direction)
+      .toBeGreaterThan(0.35);
+    await page.keyboard.up(key);
+  }
+  // After turning east, forward follows +X and screen-right follows +Z.
+  await page.evaluate(async () => {
+    const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+    const { Engine } = await import(module);
+    Engine.LastCreatedScene.activeCamera.rotation.y = -Math.PI / 2;
+  });
+  for (const [key, axis, direction] of [
+    ['a', 'z', -1],
+    ['d', 'z', 1],
+    ['w', 'x', 1],
+    ['s', 'x', -1],
   ] as const) {
     const before = (await camera(page))!;
     await page.keyboard.down(key);

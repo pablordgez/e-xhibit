@@ -7,6 +7,7 @@ import {
 } from '../core/architecture';
 import { guidedStops, pathToGuidedStop, type GuidedStop } from '../core/guided';
 import { buildStairs, buildFurnishings, buildCircularSlab, type TextureSlot } from './details';
+import { displayPlane } from './planes';
 import { useEffect, useRef, useState } from 'react';
 import { Engine } from '@babylonjs/core/Engines/engine';
 import { Scene } from '@babylonjs/core/scene';
@@ -91,6 +92,8 @@ export default function MuseumScene({
       return;
     }
     const scene = new Scene(engine);
+    // The document and floor plan use +X east, -Z north, and +Y up.
+    scene.useRightHandedSystem = true;
     scene.clearColor = new Color4(0.89, 0.9, 0.88, 1);
     scene.ambientColor = new Color3(0.75, 0.75, 0.72);
     const layout = compile(doc),
@@ -115,7 +118,7 @@ export default function MuseumScene({
     camera.minZ = 0.06;
     camera.maxZ = 100;
     camera.fov = 1.1;
-    camera.rotation.y = Math.PI;
+    camera.rotation.y = 0;
     camera.inputs.clear();
     const light = new HemisphericLight('daylight', new Vector3(0.2, 1, -0.3), scene);
     light.intensity = 0.9;
@@ -339,7 +342,7 @@ export default function MuseumScene({
       backing.material = material(frameColors[frame.preset]);
       backing.isPickable = false;
       if (frame.mat > 0) {
-        const mat = MeshBuilder.CreatePlane(
+        const mat = displayPlane(
           'mat',
           {
             width: fit.w + frame.mat * 2,
@@ -353,7 +356,7 @@ export default function MuseumScene({
         mat.material = material('#f5f0e3');
         mat.isPickable = false;
       }
-      const mesh = MeshBuilder.CreatePlane(
+      const mesh = displayPlane(
         `art-${region.id}`,
         { width: fit.w, height: fit.h, sideOrientation: Mesh.DOUBLESIDE },
         scene,
@@ -378,7 +381,7 @@ export default function MuseumScene({
       if (region.plaque !== 'none') {
         const pw = region.plaque === 'right' ? 0.7 : Math.min(fit.w, 1.2),
           ph = region.plaque === 'right' ? 0.8 : 0.48,
-          plaque = MeshBuilder.CreatePlane(
+          plaque = displayPlane(
             'explanation',
             { width: pw, height: ph, sideOrientation: Mesh.DOUBLESIDE },
             scene,
@@ -485,7 +488,7 @@ export default function MuseumScene({
           '#f4f0e8',
           true,
         );
-        const label = MeshBuilder.CreatePlane(
+        const label = displayPlane(
           stop.label,
           { size: 0.5, sideOrientation: Mesh.DOUBLESIDE },
           scene,
@@ -559,8 +562,8 @@ export default function MuseumScene({
         const dx = document.pointerLockElement === canvas ? e.movementX : e.clientX - lastX,
           dy = document.pointerLockElement === canvas ? e.movementY : e.clientY - lastY;
         if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
-        camera.rotation.y += dx * 0.003;
-        camera.rotation.x = Math.max(-1.25, Math.min(1.25, camera.rotation.x + dy * 0.003));
+        camera.rotation.y -= dx * 0.003;
+        camera.rotation.x = Math.max(-1.25, Math.min(1.25, camera.rotation.x - dy * 0.003));
         lastX = e.clientX;
         lastY = e.clientY;
       }
@@ -683,7 +686,9 @@ export default function MuseumScene({
               (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
               (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
           if (forward || right) {
-            body = walkStep(layout, body, camera.rotation.y, forward, right, dt);
+            // walkStep measures heading from +Z. A right-handed camera faces -Z
+            // and its screen-right vector is the opposite of the old LH strafe.
+            body = walkStep(layout, body, camera.rotation.y + Math.PI, forward, -right, dt);
             const found = doc.rooms.find(
               (r) =>
                 Math.abs(r.floor * STOREY - body.y) < 0.3 &&

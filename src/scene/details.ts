@@ -6,6 +6,7 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial';
 import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture';
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { displayPlane } from './planes';
 import { type Layout, type MuseumDocument, type Vec, type WalkArea } from '../core/model';
 import {
   straightTreads,
@@ -416,7 +417,7 @@ export function buildFurnishings(
       height: number,
       flat = false,
     ) => {
-      const m = MeshBuilder.CreatePlane(
+      const m = displayPlane(
         `sign-${kind}`,
         { width, height, sideOrientation: Mesh.DOUBLESIDE },
         scene,
@@ -500,7 +501,7 @@ export function buildFurnishings(
             ih = (iw * a.height) / a.width;
           const cy = y + 0.04 + (ih + 0.04) / 2;
           part('shop-print-frame', (j - 1) * 0.43, cy, 0, iw + 0.04, ih + 0.04, 0.035, '#544331');
-          const mesh = MeshBuilder.CreatePlane('shop-print', { width: iw, height: ih }, scene);
+          const mesh = displayPlane('shop-print', { width: iw, height: ih }, scene);
           const p = at((j - 1) * 0.43, cy, -0.021);
           mesh.position.set(p.x, p.y, p.z);
           mesh.rotation.y = f.rotation;
