@@ -7,7 +7,13 @@ import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTextur
 import { Color3 } from '@babylonjs/core/Maths/math.color';
 import { Vector3 } from '@babylonjs/core/Maths/math.vector';
 import { type Layout, type MuseumDocument, type Vec, type WalkArea } from '../core/model';
-import { straightTreads, SPIRAL_RADIUS, boardLines, CEILING_SLAB } from '../core/architecture';
+import {
+  straightTreads,
+  SPIRAL_RADIUS,
+  SPIRAL_LANDING_ANGLE,
+  boardLines,
+  CEILING_SLAB,
+} from '../core/architecture';
 
 export type TextureSlot = {
   mesh: Mesh;
@@ -186,15 +192,16 @@ export function buildStairs(layout: Layout, scene: Scene, box: Box, material: Ma
     const count = Math.ceil((top - bottom) / 0.15);
     // Wedge treads reach the load-bearing centre column, instead of floating
     // tangential planks around an unrelated post.
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i <= count; i++) {
+      const landing = i === count;
       const positions: number[] = [],
         indices: number[] = [];
-      const angleA = (i / count) * Math.PI * 2,
-        angleB = ((i + 1) / count) * Math.PI * 2 + 0.003;
-      const y = bottom + ((top - bottom) * (i + 1)) / count + (i === count - 1 ? 0.004 : 0);
-      const segments = 4;
+      const angleA = landing ? 0 : (i / count) * Math.PI * 2,
+        angleB = landing ? SPIRAL_LANDING_ANGLE : ((i + 1) / count) * Math.PI * 2;
+      const y = landing ? top + 0.004 : bottom + ((top - bottom) * (i + 1)) / count;
+      const segments = landing ? 24 : 4;
       for (const height of [y - 0.13, y])
-        for (const radius of [0.1, i === count - 1 ? 2.5 : SPIRAL_RADIUS])
+        for (const radius of [0.1, landing ? 2.6 : SPIRAL_RADIUS])
           for (let n = 0; n <= segments; n++) {
             const angle = angleA + ((angleB - angleA) * n) / segments;
             positions.push(cx + radius * Math.cos(angle), height, cz + radius * Math.sin(angle));
@@ -211,7 +218,7 @@ export function buildStairs(layout: Layout, scene: Scene, box: Box, material: Ma
       quad(row - 1, row * 3 - 1, row * 4 - 1, row * 2 - 1);
       const normals: number[] = [];
       VertexData.ComputeNormals(positions, indices, normals);
-      const mesh = new Mesh('spiral-wedge', scene),
+      const mesh = new Mesh(landing ? 'spiral-upper-landing' : 'spiral-wedge', scene),
         data = new VertexData();
       data.positions = positions;
       data.indices = indices;
@@ -228,18 +235,7 @@ export function buildStairs(layout: Layout, scene: Scene, box: Box, material: Ma
     column.position.set(cx, bottom + (top - bottom + 0.06) / 2, cz);
     column.material = material('#363b38');
     for (const y of [bottom, top]) {
-      // The upper fan tread extends all the way into the floor. Its radial
-      // landing overlaps the entire walking exit, rather than a small corner.
-      box(
-        'spiral-landing',
-        cx + 1.99,
-        y - 0.06,
-        cz - (y === top ? 0.2 : 0),
-        1.02,
-        0.12,
-        y === top ? 0.55 : 0.94,
-        '#b09a7b',
-      );
+      if (y === bottom) box('spiral-landing', cx + 1.99, y - 0.06, cz, 1.02, 0.12, 0.94, '#b09a7b');
       const collar = MeshBuilder.CreateCylinder(
         'column-anchor',
         { diameter: 0.4, height: 0.045, tessellation: 24 },
@@ -269,6 +265,29 @@ export function buildStairs(layout: Layout, scene: Scene, box: Box, material: Ma
       scene,
     );
     rail.material = material('#363b38');
+    const landingRail = [0.3, 2.15].map(
+      (r) =>
+        new Vector3(
+          cx + Math.cos(SPIRAL_LANDING_ANGLE) * r,
+          top + 0.95,
+          cz + Math.sin(SPIRAL_LANDING_ANGLE) * r,
+        ),
+    );
+    const guard = MeshBuilder.CreateTube(
+      'landing-guardrail',
+      { path: landingRail, radius: 0.035, tessellation: 8 },
+      scene,
+    );
+    guard.material = material('#363b38');
+    for (const p of landingRail) {
+      const post = MeshBuilder.CreateCylinder(
+        'landing-baluster',
+        { diameter: 0.04, height: 0.95, tessellation: 8 },
+        scene,
+      );
+      post.position.set(p.x, top + 0.475, p.z);
+      post.material = material('#363b38');
+    }
   }
 }
 

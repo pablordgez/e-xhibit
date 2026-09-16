@@ -1,4 +1,4 @@
-import { avoidOpenings, navigationStops, routeBetween } from './layout';
+import { avoidOpenings, navigationStops, routeBetween, surfaceHeight } from './layout';
 import { center, distance, type Layout, type MuseumDocument, type Vec } from './model';
 
 export type GuidedStop = Vec & {
@@ -36,7 +36,11 @@ export function guidedStops(doc: MuseumDocument, layout: Layout): GuidedStop[] {
                 x: start.x - 0.12,
                 z: start.z + (start.y < route.at(-1)!.y ? 0.38 : -0.38),
               }
-            : { ...next };
+            : {
+                ...next,
+                x: next.x + Math.sign(start.x - next.x) * 0.65,
+                z: next.z + Math.sign(start.z - next.z) * 0.65,
+              };
         stops.push({
           ...p,
           roomId: target,
@@ -90,8 +94,12 @@ export function guidedStops(doc: MuseumDocument, layout: Layout): GuidedStop[] {
 
 /** Join a route at the visitor's actual progress, including travel backwards. */
 export function pathToGuidedStop(layout: Layout, body: Vec, room: string, stop: GuidedStop) {
+  if (!stop.stairs && flatPathClear(layout, body, stop)) return [body, stop];
   if (!stop.route)
-    return avoidOpenings(layout, [body, ...routeBetween(layout, room, stop.roomId), stop]);
+    return simplifyGuidedPath(
+      layout,
+      avoidOpenings(layout, [body, ...routeBetween(layout, room, stop.roomId), stop]),
+    );
   const route = stop.route;
   let closest = 0,
     best = Infinity,
@@ -125,5 +133,34 @@ export function pathToGuidedStop(layout: Layout, body: Vec, room: string, stop: 
     closest <= index
       ? route.slice(Math.floor(closest) + 1, index + 1)
       : route.slice(index, Math.ceil(closest)).reverse();
-  return avoidOpenings(layout, [body, projection, ...legs]);
+  return simplifyGuidedPath(layout, avoidOpenings(layout, [body, projection, ...legs]));
+}
+
+export function flatPathClear(layout: Layout, a: Vec, b: Vec) {
+  if (Math.abs(a.y - b.y) > 0.001) return false;
+  const count = Math.max(1, Math.ceil(distance(a, b) / 0.05));
+  for (let i = 0; i <= count; i++) {
+    const t = i / count;
+    const p = { x: a.x + (b.x - a.x) * t, y: a.y, z: a.z + (b.z - a.z) * t };
+    const height = surfaceHeight(layout, p, p);
+    if (height === null || Math.abs(height - p.y) > 0.05) return false;
+  }
+  return true;
+}
+
+/** Remove duplicate points and detours only across genuinely walkable flat floor. */
+export function simplifyGuidedPath(layout: Layout, points: Vec[]) {
+  const result: Vec[] = [];
+  let i = 0;
+  while (i < points.length) {
+    const start = points[i];
+    if (!result.length || distance(result.at(-1)!, start) > 0.001) result.push(start);
+    let next = i + 1;
+    for (let j = i + 2; j < points.length; j++) {
+      if (points.slice(i, j + 1).some((p) => Math.abs(p.y - start.y) > 0.001)) break;
+      if (flatPathClear(layout, start, points[j])) next = j;
+    }
+    i = next;
+  }
+  return result;
 }

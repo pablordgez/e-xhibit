@@ -1,4 +1,10 @@
-import { surfacePlates, contains, boardLines, CEILING_SLAB } from '../core/architecture';
+import {
+  surfacePlates,
+  contains,
+  boardLines,
+  CEILING_SLAB,
+  wallFacingYaw,
+} from '../core/architecture';
 import { guidedStops, pathToGuidedStop, type GuidedStop } from '../core/guided';
 import { buildStairs, buildFurnishings, buildCircularSlab, type TextureSlot } from './details';
 import { useEffect, useRef, useState } from 'react';
@@ -322,14 +328,7 @@ export default function MuseumScene({
         );
       const cx = region.x + region.w / 2 - (region.plaque === 'right' ? 0.425 : 0),
         cy = region.y + region.h / 2 + (region.plaque === 'below' ? 0.275 : 0);
-      const angle =
-        wall.side === 'north'
-          ? Math.PI
-          : wall.side === 'south'
-            ? 0
-            : wall.side === 'east'
-              ? -Math.PI / 2
-              : Math.PI / 2;
+      const angle = wallFacingYaw(wall.side);
       const backing = MeshBuilder.CreateBox(
         `frame-${region.id}`,
         { width: fit.w + fit.border * 2, height: fit.h + fit.border * 2, depth: 0.07 },

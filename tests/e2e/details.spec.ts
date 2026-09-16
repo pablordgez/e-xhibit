@@ -1,31 +1,36 @@
 import { test, expect, type Page } from '@playwright/test';
 
-async function aimAt(page: Page, name: string) {
-  return page.evaluate(async (name) => {
-    const engineModule = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
-    const mathModule = '/node_modules/.vite/deps/@babylonjs_core_Maths_math__vector.js';
-    const { Engine } = await import(engineModule),
-      { Vector3, Matrix } = await import(mathModule);
-    const scene = Engine.LastCreatedScene,
-      camera = scene.activeCamera,
-      engine = scene.getEngine();
-    const target = scene.getMeshByName(name).position;
-    camera.rotation.y = Math.atan2(target.x - camera.position.x, target.z - camera.position.z);
-    camera.rotation.x = -Math.atan2(
-      target.y - camera.position.y,
-      Math.hypot(target.x - camera.position.x, target.z - camera.position.z),
-    );
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
-    const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
-    const p = Vector3.Project(target, Matrix.Identity(), scene.getTransformMatrix(), viewport);
-    const rect = engine.getRenderingCanvas().getBoundingClientRect();
-    return {
-      x: rect.left + p.x * engine.getHardwareScalingLevel(),
-      y: rect.top + p.y * engine.getHardwareScalingLevel(),
-    };
-  }, name);
+async function aimAt(page: Page, name: string, asset?: string) {
+  return page.evaluate(
+    async ({ name, asset }) => {
+      const engineModule = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+      const mathModule = '/node_modules/.vite/deps/@babylonjs_core_Maths_math__vector.js';
+      const { Engine } = await import(engineModule),
+        { Vector3, Matrix } = await import(mathModule);
+      const scene = Engine.LastCreatedScene,
+        camera = scene.activeCamera,
+        engine = scene.getEngine();
+      const target = scene.meshes.find(
+        (m: any) => m.name === name && (!asset || m.metadata?.id === asset),
+      ).position;
+      camera.rotation.y = Math.atan2(target.x - camera.position.x, target.z - camera.position.z);
+      camera.rotation.x = -Math.atan2(
+        target.y - camera.position.y,
+        Math.hypot(target.x - camera.position.x, target.z - camera.position.z),
+      );
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+      const viewport = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight());
+      const p = Vector3.Project(target, Matrix.Identity(), scene.getTransformMatrix(), viewport);
+      const rect = engine.getRenderingCanvas().getBoundingClientRect();
+      return {
+        x: rect.left + p.x * engine.getHardwareScalingLevel(),
+        y: rect.top + p.y * engine.getHardwareScalingLevel(),
+      };
+    },
+    { name, asset },
+  );
 }
 
 test('information and download signs are identifiable, clickable 3D objects', async ({ page }) => {
@@ -171,4 +176,38 @@ test('artwork labels are sharp and skirting joins doorway walls and corridors', 
   expect(result.doorSides).toBeGreaterThanOrEqual(2);
   expect(result.corridor).toBe(true);
   expect(result.mergedJoin).toBe(true);
+});
+
+test('the corridor-end artwork and its label face visitors without mirroring', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/visit');
+  await page.getByRole('button', { name: 'Enter exhibition', exact: true }).click();
+  await page
+    .getByRole('navigation', { name: 'Nearby destinations' })
+    .getByRole('button', { name: 'The reading room', exact: true })
+    .click();
+  await expect(page.locator('.location-pill strong')).toHaveText('The reading room');
+  await aimAt(page, 'explanation', 'art-6');
+  await expect
+    .poll(async () =>
+      page.evaluate(async () => {
+        const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+        const { Engine } = await import(module);
+        const s = Engine.LastCreatedScene;
+        return Boolean(s.getMeshByName('art-exhibit-5').material.diffuseTexture?.isReady());
+      }),
+    )
+    .toBe(true);
+  await page.screenshot({ path: 'output/playwright/reading-room-orientation.png' });
+  const fronts = await page.evaluate(async () => {
+    const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+    const math = '/node_modules/.vite/deps/@babylonjs_core_Maths_math__vector.js';
+    const { Engine } = await import(module),
+      { Vector3 } = await import(math);
+    return Engine.LastCreatedScene.meshes
+      .filter((m: any) => m.metadata?.id === 'art-6' && m.position.x < -10)
+      .map((m: any) => m.getDirection(new Vector3(0, 0, -1)).x);
+  });
+  expect(fronts).toHaveLength(2);
+  for (const x of fronts) expect(x).toBeGreaterThan(0.99);
 });

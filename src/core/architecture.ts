@@ -13,6 +13,45 @@ export const HEADROOM = 2.1;
 export const SLAB = 0.12;
 export const CEILING_SLAB = STOREY - HEIGHT - SLAB;
 export const SPIRAL_RADIUS = 2.05;
+export const SPIRAL_LANDING_ANGLE = Math.PI / 3;
+
+export function spiralGeometry(ramp: Ramp) {
+  const points =
+    ramp.points[0].y < ramp.points.at(-1)!.y ? ramp.points : [...ramp.points].reverse();
+  return { x: points[1].x - 1.5, z: points[1].z, bottom: points[0].y, top: points.at(-1)!.y };
+}
+
+/** A continuous annular surface, including the full upper landing. */
+export function spiralWalkingHeight(ramp: Ramp, p: Vec, previous: Vec): number | null {
+  const g = spiralGeometry(ramp);
+  const x = p.x - g.x,
+    z = p.z - g.z,
+    radius = Math.hypot(x, z);
+  const angle = (Math.atan2(z, x) + Math.PI * 2) % (Math.PI * 2);
+  if (radius < 0.38) return null;
+  if (
+    Math.abs(previous.y - g.bottom) < 0.3 &&
+    x > SPIRAL_RADIUS - 0.13 &&
+    x < 2.6 &&
+    Math.abs(z) < 0.42
+  )
+    return g.bottom;
+  if (Math.abs(previous.y - g.top) < 0.45 && angle <= SPIRAL_LANDING_ANGLE && radius <= 2.6)
+    return g.top;
+  if (radius > SPIRAL_RADIUS - 0.13) return null;
+  const y = g.bottom + (angle / (Math.PI * 2)) * (g.top - g.bottom);
+  return Math.abs(y - previous.y) < 0.45 ? y : null;
+}
+
+export function wallFacingYaw(side: 'north' | 'south' | 'east' | 'west') {
+  return side === 'north'
+    ? Math.PI
+    : side === 'south'
+      ? 0
+      : side === 'east'
+        ? Math.PI / 2
+        : -Math.PI / 2;
+}
 
 /** Keep every floor fragment on one world-space board grid. */
 export function boardLines(area: WalkArea) {

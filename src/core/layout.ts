@@ -1,4 +1,11 @@
-import { stairArchitecture, contains, spiralObstructs } from './architecture';
+import {
+  stairArchitecture,
+  contains,
+  spiralObstructs,
+  spiralWalkingHeight,
+  spiralGeometry,
+  SPIRAL_RADIUS,
+} from './architecture';
 import {
   MODULE,
   STOREY,
@@ -44,6 +51,8 @@ export function connectorPoints(
     const all = [
       { x: low.x + 2.4, y: low.y, z: low.z },
       ...pts,
+      { x: high.x + 1.5, y: high.y, z: high.z + 0.8 },
+      { x: high.x + 2.4, y: high.y, z: high.z + 0.8 },
       { x: high.x + 2.4, y: high.y, z: high.z },
     ];
     return a.floor < b.floor ? all : all.reverse();
@@ -605,7 +614,12 @@ export function surfaceHeight(layout: Layout, p: Vec, previous: Vec): number | n
   // Ramp samples are continuous collision surfaces; the visible treads are decorative.
   let rampY: number | null = null,
     best = Infinity;
-  for (const ramp of layout.ramps)
+  for (const ramp of layout.ramps) {
+    if (ramp.kind === 'spiral') {
+      const height = spiralWalkingHeight(ramp, p, previous);
+      if (height !== null) return height;
+      continue;
+    }
     for (let i = 1; i < ramp.points.length; i++) {
       const a = ramp.points[i - 1],
         b = ramp.points[i],
@@ -623,6 +637,7 @@ export function surfaceHeight(layout: Layout, p: Vec, previous: Vec): number | n
         rampY = y;
       }
     }
+  }
   if (rampY !== null) return rampY;
   for (const hole of layout.holes)
     if (Math.abs(hole.y - previous.y) < 0.3 && contains(hole, p, 0.13)) return null;
@@ -763,6 +778,28 @@ export function walkStep(
       body = { ...desired, y: height };
       continue;
     }
+    // Slide along the curved tread edges instead of snagging when the visitor
+    // drifts slightly outward while steering around the spiral.
+    let slidOnStair = false;
+    for (const ramp of layout.ramps.filter((r) => r.kind === 'spiral')) {
+      const g = spiralGeometry(ramp);
+      if (body.y <= g.bottom + 0.1 || body.y >= g.top - 0.1) continue;
+      const radius = Math.hypot(desired.x - g.x, desired.z - g.z);
+      const clamped = Math.max(0.39, Math.min(SPIRAL_RADIUS - 0.135, radius));
+      if (Math.abs(clamped - radius) > 0.07) continue;
+      const p = {
+        x: g.x + ((desired.x - g.x) / radius) * clamped,
+        z: g.z + ((desired.z - g.z) / radius) * clamped,
+        y: body.y,
+      };
+      const y = surfaceHeight(layout, p, body);
+      if (y !== null) {
+        body = { ...p, y };
+        slidOnStair = true;
+        break;
+      }
+    }
+    if (slidOnStair) continue;
     // Slide around the actual round shaft instead of snagging on an invisible
     // square or dropping an entire movement axis at its edge.
     const circle = [...layout.holes, ...layout.stairClearances].find(
