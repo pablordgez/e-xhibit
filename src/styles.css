@@ -1083,19 +1083,17 @@ hr {
 .exhibit-layout {
   width: 100%;
   height: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 8px;
-  gap: 5px;
+  position: relative;
   overflow: hidden;
 }
-.exhibit-layout.plaque-below {
-  flex-direction: column;
+.wall-face {
+  container-type: inline-size;
 }
 .framed-image {
+  position: absolute;
+  transform: translate(-50%, 50%);
   border-style: solid;
-  box-sizing: content-box;
+  box-sizing: border-box;
   box-shadow: 1px 3px 6px #0002;
   flex-shrink: 0;
   background: #ffffff;
@@ -1123,21 +1121,9 @@ hr {
   box-shadow: none;
 }
 .mini-plaque {
-  background: #ffffff;
-  padding: 3px;
-  text-align: left;
-  max-width: 30%;
+  position: absolute;
+  transform: translate(-50%, 50%);
   display: block;
-  font-size: 5px;
-  line-height: 1.5;
-}
-.mini-plaque span {
-  display: block;
-  font-size: 3px;
-}
-.plaque-below .mini-plaque {
-  max-width: 70%;
-  align-self: center;
 }
 .wall-toolbar {
   display: flex;

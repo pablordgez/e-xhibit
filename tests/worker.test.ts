@@ -160,11 +160,13 @@ describe('private authoring boundary', () => {
     document.name = 'New name';
     document.categories = [{ id: 'landscapes', name: 'Landscapes' }];
     document.assets[0].categoryIds = ['landscapes'];
+    document.regions[0].plaqueAuto = false;
     expect((await call('/draft', 'PUT', { document, revision: 0 })).status).toBe(200);
     expect((await call('/draft', 'PUT', { document: sample, revision: 0 })).status).toBe(409);
     expect(tables.museum_drafts[0].document.name).toBe('New name');
     expect(tables.museum_drafts[0].document.categories).toEqual(document.categories);
     expect(tables.museum_drafts[0].document.assets[0].categoryIds).toEqual(['landscapes']);
+    expect(tables.museum_drafts[0].document.regions[0].plaqueAuto).toBe(false);
   });
   it('does not accept arbitrary media URLs as uploaded assets', async () => {
     const document = structuredClone(sample);

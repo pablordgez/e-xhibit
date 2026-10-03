@@ -52,6 +52,7 @@ test('artwork, labels and right-hand plaques read left to right on every wall', 
     w: 5.4,
     h: 2.8,
     plaque: 'right',
+    plaqueAuto: false,
   }));
   await page.addInitScript((document) => {
     localStorage.setItem(

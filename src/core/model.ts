@@ -74,6 +74,7 @@ export const regionSchema = z.object({
   assetId: id.optional(),
   frame: frameSchema.optional(),
   plaque: z.enum(['none', 'right', 'below']),
+  plaqueAuto: z.boolean().optional(),
 });
 export type Region = z.infer<typeof regionSchema>;
 export const museumSchema = z.object({

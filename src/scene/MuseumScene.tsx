@@ -313,7 +313,12 @@ export default function MuseumScene({
       const asset = doc.assets.find((a) => a.id === region.assetId),
         wall = layout.walls.find((w) => w.id === region.wall);
       if (!asset || !wall) continue;
-      const fit = fitExhibit(region, asset.width / asset.height, region.frame ?? doc.defaultFrame),
+      const fit = fitExhibit(
+          region,
+          asset.width / asset.height,
+          region.frame ?? doc.defaultFrame,
+          asset,
+        ),
         frame = region.frame ?? doc.defaultFrame;
       const normal = sideDelta[wall.side],
         tangent =
@@ -330,8 +335,8 @@ export default function MuseumScene({
           wall.center.y + v,
           wall.center.z + tangent[1] * (u - 3) - normal[1] * depth,
         );
-      const cx = region.x + region.w / 2 - (region.plaque === 'right' ? 0.425 : 0),
-        cy = region.y + region.h / 2 + (region.plaque === 'below' ? 0.275 : 0);
+      const cx = fit.image.x,
+        cy = fit.image.y;
       const angle = wallFacingYaw(wall.side);
       const backing = MeshBuilder.CreateBox(
         `frame-${region.id}`,
@@ -379,18 +384,16 @@ export default function MuseumScene({
         pending: false,
         last: 0,
       });
-      if (region.plaque !== 'none') {
-        const pw = region.plaque === 'right' ? 0.7 : Math.min(fit.w, 1.2),
-          ph = region.plaque === 'right' ? 0.8 : 0.48,
+      if (fit.plaque) {
+        const card = fit.plaque,
+          pw = card.w,
+          ph = card.h,
           plaque = displayPlane(
             'explanation',
             { width: pw, height: ph, sideOrientation: Mesh.DOUBLESIDE },
             scene,
           );
-        plaque.position =
-          region.plaque === 'right'
-            ? at(region.x + region.w - 0.45, cy, 0.1)
-            : at(cx, region.y + 0.24, 0.1);
+        plaque.position = at(card.x, card.y, 0.1);
         plaque.rotation.y = angle;
         plaque.metadata = { kind: 'art', id: asset.id, narrate: true };
         const pixelWidth = Math.min(1536, Math.round((2048 * pw) / ph)),
@@ -407,41 +410,13 @@ export default function MuseumScene({
           ctx.scale(actualSize.width / pixelWidth, actualSize.height / pixelHeight);
           texture.anisotropicFilteringLevel = 16;
           const scale = pixelWidth / pw;
-          const margin = scale * 0.025,
-            lineHeight = scale * 0.047;
+          const margin = scale * 0.025;
           ctx.fillStyle = '#f7f4ed';
           ctx.fillRect(0, 0, pixelWidth, pixelHeight);
           ctx.fillStyle = '#333a31';
-          ctx.font = `bold ${scale * 0.043}px Georgia`;
-          ctx.fillText(asset.title, margin, margin + scale * 0.043, pixelWidth - margin * 2);
-          ctx.font = `${scale * 0.034}px sans-serif`;
-          const words = asset.explanation.split(/\s+/);
-          let line = '';
-          const lines: string[] = [];
-          for (const word of words) {
-            if (line && ctx.measureText(line + word).width > pixelWidth - margin * 2) {
-              lines.push(line);
-              line = '';
-            }
-            line += word + ' ';
-          }
-          if (line) lines.push(line);
-          const firstLine = margin + scale * 0.105;
-          const capacity = Math.max(
-            1,
-            Math.floor((pixelHeight - margin - firstLine) / lineHeight) + 1,
-          );
-          const overflow = lines.length > capacity;
-          const shown = lines.slice(0, overflow ? Math.max(0, capacity - 1) : capacity);
-          shown.forEach((text, i) => ctx.fillText(text, margin, firstLine + i * lineHeight));
-          if (overflow) {
-            ctx.font = `italic ${scale * 0.029}px sans-serif`;
-            ctx.fillText(
-              'Select to read the full text',
-              margin,
-              firstLine + (capacity - 1) * lineHeight,
-              pixelWidth - margin * 2,
-            );
+          for (const line of card.lines) {
+            ctx.font = `${line.kind === 'title' ? 'bold ' : ''}${scale * line.size}px ${line.kind === 'title' ? 'Georgia' : 'sans-serif'}`;
+            ctx.fillText(line.text, margin, line.baseline * scale, pixelWidth - margin * 2);
           }
           texture.update();
           return texture;

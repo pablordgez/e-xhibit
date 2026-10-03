@@ -97,7 +97,7 @@ export default function WallEditor({
                 {regions.map((r) => {
                   const a = doc.assets.find((a) => a.id === r.assetId),
                     f = r.frame ?? doc.defaultFrame,
-                    fit = fitExhibit(r, a ? a.width / a.height : 1, f);
+                    fit = fitExhibit(r, a ? a.width / a.height : 1, f, a);
                   return (
                     <button
                       key={r.id}
@@ -120,23 +120,52 @@ export default function WallEditor({
                       }
                     >
                       {a ? (
-                        <div className={`exhibit-layout plaque-${r.plaque}`}>
+                        <div
+                          className="exhibit-layout"
+                          data-plaque-side={fit.plaque?.side ?? 'none'}
+                        >
                           <div
                             className={`framed-image frame-${f.preset}`}
                             style={{
-                              width: `${(fit.w / r.w) * 100}%`,
-                              aspectRatio: `${a.width}/${a.height}`,
-                              borderWidth: f.preset === 'none' ? 0 : `${f.width * 50}px`,
-                              padding: `${f.mat * 30}px`,
+                              left: `${((fit.image.x - r.x) / r.w) * 100}%`,
+                              bottom: `${((fit.image.y - r.y) / r.h) * 100}%`,
+                              width: `${((fit.w + fit.border * 2) / r.w) * 100}%`,
+                              height: `${((fit.h + fit.border * 2) / r.h) * 100}%`,
+                              borderWidth: f.preset === 'none' ? 0 : `${(f.width / 6) * 100}cqw`,
+                              padding: `${(f.mat / 6) * 100}cqw`,
                             }}
                           >
                             <Image asset={a} size="1024" />
                           </div>
-                          {r.plaque !== 'none' && (
-                            <span className="mini-plaque">
-                              <b>{a.title}</b>
-                              <span>{a.attribution}</span>
-                            </span>
+                          {fit.plaque && (
+                            <svg
+                              className="mini-plaque"
+                              aria-hidden="true"
+                              viewBox={`0 0 ${fit.plaque.w} ${fit.plaque.h}`}
+                              style={{
+                                left: `${((fit.plaque.x - r.x) / r.w) * 100}%`,
+                                bottom: `${((fit.plaque.y - r.y) / r.h) * 100}%`,
+                                width: `${(fit.plaque.w / r.w) * 100}%`,
+                                height: `${(fit.plaque.h / r.h) * 100}%`,
+                              }}
+                            >
+                              <rect width={fit.plaque.w} height={fit.plaque.h} fill="#f7f4ed" />
+                              {fit.plaque.lines.map((line, i) => (
+                                <text
+                                  key={i}
+                                  x={0.025}
+                                  y={line.baseline}
+                                  fontSize={line.size}
+                                  fontFamily={
+                                    line.kind === 'title' ? 'Georgia, serif' : 'sans-serif'
+                                  }
+                                  fontWeight={line.kind === 'title' ? 'bold' : 'normal'}
+                                  fill="#333a31"
+                                >
+                                  {line.text}
+                                </text>
+                              ))}
+                            </svg>
                           )}
                         </div>
                       ) : (
@@ -205,7 +234,13 @@ export default function WallEditor({
                       ...d,
                       regions: d.regions.map((x) =>
                         x.id === region!.id
-                          ? { ...x, assetId: r.assetId, frame: r.frame, plaque: r.plaque }
+                          ? {
+                              ...x,
+                              assetId: r.assetId,
+                              frame: r.frame,
+                              plaque: r.plaque,
+                              plaqueAuto: r.plaqueAuto,
+                            }
                           : x,
                       ),
                       unplaced: d.unplaced.filter((x) => x.id !== r.id),
@@ -256,14 +291,36 @@ export default function WallEditor({
             <label>
               Explanation plaque
               <select
-                value={region.plaque}
-                onChange={(e) => patch({ plaque: e.target.value as Region['plaque'] })}
+                aria-label="Explanation plaque"
+                value={
+                  region.plaque === 'none'
+                    ? 'none'
+                    : region.plaqueAuto === false
+                      ? region.plaque
+                      : 'auto'
+                }
+                onChange={(e) =>
+                  patch(
+                    e.target.value === 'auto'
+                      ? { plaque: 'below', plaqueAuto: true }
+                      : { plaque: e.target.value as Region['plaque'], plaqueAuto: false },
+                  )
+                }
               >
+                <option value="auto">Automatic (largest image)</option>
                 <option value="none">Hidden</option>
                 <option value="right">Beside the image</option>
                 <option value="below">Below the image</option>
               </select>
             </label>
+            {asset && region.plaque !== 'none' && region.plaqueAuto !== false && (
+              <p className="tiny muted">
+                {fitExhibit(region, asset.width / asset.height, frame, asset).plaque?.side ===
+                'right'
+                  ? 'Placed beside the image for more artwork space.'
+                  : 'Placed below the image for more artwork space.'}
+              </p>
+            )}
             <hr />
             <span className="eyebrow">FRAME & MAT</span>
             <label>

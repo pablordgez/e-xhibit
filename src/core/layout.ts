@@ -27,6 +27,8 @@ import {
   type Region,
   type Furnishing,
 } from './model';
+import { fitExhibit } from './exhibits';
+export { fitExhibit } from './exhibits';
 
 export function connectorPoints(
   a: Room,
@@ -289,7 +291,7 @@ export function compile(doc: MuseumDocument): Layout {
     if (r.assetId) {
       const a = doc.assets.find((a) => a.id === r.assetId);
       if (!a || !a.ready) issue('asset', 'Exhibit image has not finished uploading.', r.id);
-      if (a && !fitExhibit(r, a.width / a.height, r.frame ?? doc.defaultFrame).fits)
+      if (a && !fitExhibit(r, a.width / a.height, r.frame ?? doc.defaultFrame, a).fits)
         issue('fit', 'Image, frame, and explanation need more wall space.', r.id);
       if (a && r.plaque !== 'none' && a.explanation.length > 600)
         issue(
@@ -552,18 +554,6 @@ export function compile(doc: MuseumDocument): Layout {
       }
     }
   return layout;
-}
-export function fitExhibit(
-  r: Region,
-  aspect: number,
-  frame: { width: number; mat: number; preset: string },
-) {
-  const border = (frame.preset === 'none' ? 0 : frame.width) + frame.mat;
-  const availableW = r.w - 0.2 - (r.plaque === 'right' ? 0.85 : 0) - border * 2,
-    availableH = r.h - 0.2 - (r.plaque === 'below' ? 0.55 : 0) - border * 2;
-  const w = Math.max(0.05, Math.min(availableW, availableH * aspect)),
-    h = w / aspect;
-  return { w, h, border, fits: availableW > 0.2 && availableH > 0.2 && w > 0.15 && h > 0.15 };
 }
 export function bookPageFits(text: string) {
   return (
