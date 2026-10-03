@@ -11,21 +11,25 @@ import {
 import { compile, fitExhibit } from '../core/layout';
 import { initializeWall, mergeRegions, splitRegion, resizeRegion } from '../core/operations';
 import { Image } from './common';
+import ArtworkPicker from './ArtworkBrowser';
 export default function WallEditor({
   doc,
   change,
   roomId,
   selectRoom,
+  onCollection,
 }: {
   doc: MuseumDocument;
   change: (fn: (d: MuseumDocument) => MuseumDocument) => void;
   roomId: string;
   selectRoom: (id: string) => void;
+  onCollection: () => void;
 }) {
   const [side, setSide] = useState<Side>('north'),
     [selection, setSelection] = useState<string[]>([]),
     [ratio, setRatio] = useState(0.5),
-    [error, setError] = useState('');
+    [error, setError] = useState(''),
+    [picker, setPicker] = useState(false);
   const wall = wallId(roomId, side),
     compiled = compile(doc),
     wallInfo = compiled.walls.find((w) => w.id === wall),
@@ -35,6 +39,7 @@ export default function WallEditor({
     frame = region?.frame ?? doc.defaultFrame;
   useEffect(() => {
     setSelection([]);
+    setPicker(false);
   }, [wall]);
   const patch = (patch: Partial<Region>) =>
     change((d) => ({
@@ -227,20 +232,17 @@ export default function WallEditor({
         <span className="eyebrow">EXHIBIT PROPERTIES</span>
         {region ? (
           <>
-            <label>
-              Artwork
-              <select
-                value={region.assetId ?? ''}
-                onChange={(e) => patch({ assetId: e.target.value || undefined })}
+            <div className="artwork-choice">
+              <span className="field-label">Artwork</span>
+              <button
+                className="secondary full"
+                aria-haspopup="dialog"
+                onClick={() => setPicker(true)}
               >
-                <option value="">Empty region</option>
-                {doc.assets.map((a) => (
-                  <option value={a.id} key={a.id}>
-                    {a.title}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <ImagePlus size={16} /> {asset ? 'Change artwork' : 'Choose artwork'}
+              </button>
+              <p className="tiny muted">{asset?.title ?? 'Empty region'}</p>
+            </div>
             {asset && (
               <>
                 <div className="inspector-art">
@@ -374,6 +376,21 @@ export default function WallEditor({
           </div>
         )}
       </aside>
+      {picker && region && (
+        <ArtworkPicker
+          doc={doc}
+          selected={region.assetId}
+          onClose={() => setPicker(false)}
+          onCollection={() => {
+            setPicker(false);
+            onCollection();
+          }}
+          onSelect={(assetId) => {
+            patch({ assetId });
+            setPicker(false);
+          }}
+        />
+      )}
     </div>
   );
 }

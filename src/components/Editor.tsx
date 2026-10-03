@@ -241,6 +241,7 @@ export default function Editor({
                   change={change}
                   roomId={selectedId}
                   selectRoom={setSelected}
+                  onCollection={() => setSection('collection')}
                 />
               ) : (
                 <div className="preview-wrapper">

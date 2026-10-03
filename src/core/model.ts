@@ -59,8 +59,11 @@ export const assetSchema = z.object({
   variants: z.record(z.string().max(500)),
   downloadable: z.boolean(),
   ready: z.boolean(),
+  categoryIds: z.array(id).max(100).optional(),
 });
 export type Asset = z.infer<typeof assetSchema>;
+export const categorySchema = z.object({ id, name: z.string().trim().min(1).max(80) });
+export type Category = z.infer<typeof categorySchema>;
 export const regionSchema = z.object({
   id,
   wall: z.string().max(150),
@@ -84,6 +87,7 @@ export const museumSchema = z.object({
   rooms: z.array(roomSchema).min(1).max(50),
   connections: z.array(connectionSchema).max(200),
   assets: z.array(assetSchema).max(500),
+  categories: z.array(categorySchema).max(100).optional(),
   regions: z.array(regionSchema).max(3000),
   unplaced: z.array(regionSchema).max(3000),
 });

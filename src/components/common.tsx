@@ -42,9 +42,11 @@ export function Modal({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
+    const dialog = ref.current;
     document.exitPointerLock?.();
-    ref.current?.showModal();
+    dialog?.showModal();
     return () => {
+      dialog?.close();
       previous?.focus();
     };
   }, []);

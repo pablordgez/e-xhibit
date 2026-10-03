@@ -158,9 +158,13 @@ describe('private authoring boundary', () => {
   it('saves with a revision precondition and rejects a stale writer', async () => {
     const document = structuredClone(sample);
     document.name = 'New name';
+    document.categories = [{ id: 'landscapes', name: 'Landscapes' }];
+    document.assets[0].categoryIds = ['landscapes'];
     expect((await call('/draft', 'PUT', { document, revision: 0 })).status).toBe(200);
     expect((await call('/draft', 'PUT', { document: sample, revision: 0 })).status).toBe(409);
     expect(tables.museum_drafts[0].document.name).toBe('New name');
+    expect(tables.museum_drafts[0].document.categories).toEqual(document.categories);
+    expect(tables.museum_drafts[0].document.assets[0].categoryIds).toEqual(['landscapes']);
   });
   it('does not accept arbitrary media URLs as uploaded assets', async () => {
     const document = structuredClone(sample);
@@ -235,7 +239,10 @@ describe('immutable publishing', () => {
   it('excludes unused private collection records', () => {
     const doc = structuredClone(sample);
     doc.assets.push({ ...doc.assets[0], id: 'private', title: 'Unreleased study' });
+    doc.categories = [{ id: 'private-series', name: 'Unreleased series' }];
+    doc.assets.at(-1)!.categoryIds = ['private-series'];
     expect(publicDocument(doc).assets.some((a) => a.id === 'private')).toBe(false);
+    expect(publicDocument(doc).categories).toEqual([]);
   });
   it('checks both per-art permission and gift shop existence', async () => {
     tables.museum_drafts[0].document.assets[0].downloadable = true;

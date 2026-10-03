@@ -118,6 +118,7 @@ export default function MuseumScene({
     camera.minZ = 0.06;
     camera.maxZ = 100;
     camera.fov = 1.1;
+    let targetFov = camera.fov;
     camera.rotation.y = 0;
     camera.inputs.clear();
     const light = new HemisphericLight('daylight', new Vector3(0.2, 1, -0.3), scene);
@@ -608,11 +609,23 @@ export default function MuseumScene({
       moved = false;
       keys.clear();
     };
+    const wheel = (e: WheelEvent) => {
+      if (state.current.paused || e.ctrlKey) return;
+      e.preventDefault();
+      const delta =
+        e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1);
+      targetFov = Math.max(
+        0.35,
+        Math.min(1.35, targetFov + Math.max(-120, Math.min(120, delta)) * 0.0015),
+      );
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) camera.fov = targetFov;
+    };
     document.addEventListener('pointerlockchange', lockChange);
     canvas.addEventListener('pointercancel', pointerCancel);
     canvas.addEventListener('pointerdown', down);
     canvas.addEventListener('pointermove', move);
     canvas.addEventListener('pointerup', up);
+    canvas.addEventListener('wheel', wheel, { passive: false });
     window.addEventListener('keydown', keydown);
     window.addEventListener('keyup', keyup);
     window.addEventListener('blur', blur);
@@ -628,7 +641,7 @@ export default function MuseumScene({
     let movementScale = window.matchMedia('(pointer: coarse)').matches ? 1.5 : 1;
     let lastMotion = performance.now(),
       sharp = false;
-    let lastPose = [body.x, body.y, body.z, camera.rotation.x, camera.rotation.y];
+    let lastPose = [body.x, body.y, body.z, camera.rotation.x, camera.rotation.y, camera.fov];
     engine.setHardwareScalingLevel(movementScale);
     engine.runRenderLoop(() => {
       if (disposed) return;
@@ -638,6 +651,7 @@ export default function MuseumScene({
         keys.clear();
         if (document.pointerLockElement === canvas) document.exitPointerLock();
       }
+      if (!s.paused) camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-12 * dt));
       if (s.mode !== lastMode) {
         path = [];
         goal = null;
@@ -714,7 +728,7 @@ export default function MuseumScene({
         ),
       );
       const now = performance.now();
-      const pose = [body.x, body.y, body.z, camera.rotation.x, camera.rotation.y];
+      const pose = [body.x, body.y, body.z, camera.rotation.x, camera.rotation.y, camera.fov];
       if (pose.some((v, i) => Math.abs(v - lastPose[i]) > 0.0001)) lastMotion = now;
       lastPose = pose;
       const reading = now - lastMotion > 700;
@@ -758,7 +772,10 @@ export default function MuseumScene({
           t.last = now;
           // Select resolution from projected image size; wide merged cells naturally request larger variants.
           const worldWidth = t.mesh.getBoundingInfo().boundingBox.extendSize.x * 2;
-          const projected = (worldWidth / Math.max(d, 1)) * engine.getRenderWidth();
+          const projected =
+            (worldWidth / Math.max(d, 1)) *
+            engine.getRenderWidth() *
+            (Math.tan(1.1 / 2) / Math.tan(camera.fov / 2));
           const size = projected > 900 ? '2048' : projected > 400 ? '1024' : '512';
           if (t.pending || t.size === size) continue;
           t.pending = true;
@@ -808,6 +825,7 @@ export default function MuseumScene({
       canvas.removeEventListener('pointerdown', down);
       canvas.removeEventListener('pointermove', move);
       canvas.removeEventListener('pointerup', up);
+      canvas.removeEventListener('wheel', wheel);
       window.removeEventListener('keydown', keydown);
       window.removeEventListener('keyup', keyup);
       window.removeEventListener('blur', blur);
@@ -823,7 +841,7 @@ export default function MuseumScene({
         ref={canvasRef}
         className="museum-canvas"
         tabIndex={0}
-        aria-label="Interactive 3D museum. Use the room navigation or switch to walking controls."
+        aria-label="Interactive 3D museum. Use the room navigation or switch to walking controls. Scroll to zoom."
       />
       {hint && (
         <div className="scene-hint" role="status">
