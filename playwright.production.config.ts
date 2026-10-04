@@ -6,7 +6,9 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:8787',
     ...devices['Desktop Chrome'],
-    launchOptions: { args: ['--enable-unsafe-swiftshader'] },
+    launchOptions: {
+      args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    },
   },
   webServer: {
     command: 'npm run build && npx wrangler dev --ip 127.0.0.1 --port 8787',
