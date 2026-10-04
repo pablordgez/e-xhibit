@@ -2715,10 +2715,12 @@ hr {
 }
 .welcome-overlay {
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
 }
 .welcome-overlay > div {
   padding: 135px 7vw 45px;
+  min-width: 0;
+  container-type: inline-size;
 }
 .welcome-art {
   margin: 130px 5vw 80px 0;
@@ -2742,7 +2744,10 @@ hr {
   margin-top: 15px;
 }
 .welcome-overlay h1 {
-  font-size: clamp(75px, 11vw, 170px);
+  font-size: clamp(40px, 16cqw, 170px);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 .wall-region.chosen {
   border-color: var(--orange);
@@ -2778,7 +2783,7 @@ hr {
     min-height: 65%;
   }
   .welcome-overlay h1 {
-    font-size: 21vw;
+    font-size: clamp(40px, 12vw, 80px);
   }
   .welcome-art {
     margin: 0 25px 35px;
