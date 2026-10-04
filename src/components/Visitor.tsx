@@ -179,12 +179,13 @@ export default function Visitor({
           </span>
         </button>
         <div className="visitor-actions">
-          <button onClick={() => setOverlay({ kind: 'catalog', id: '' })}>
+          <button aria-label="Collection" onClick={() => setOverlay({ kind: 'catalog', id: '' })}>
             <List size={17} />
             <span>Collection</span>
           </button>
           {doc.audioguide && (
             <button
+              aria-label={`Audioguide ${guide ? 'on' : 'off'}`}
               aria-pressed={guide}
               disabled={!speechAvailable}
               title={speechAvailable ? 'Toggle audioguide' : 'Device narration is unavailable'}
@@ -198,7 +199,7 @@ export default function Visitor({
               <span>Audioguide {guide ? 'on' : 'off'}</span>
             </button>
           )}
-          <button onClick={onEdit}>
+          <button aria-label={preview ? 'Back to editor' : 'Curator'} onClick={onEdit}>
             <Settings2 size={16} />
             <span>{preview ? 'Back to editor' : 'Curator'}</span>
           </button>

@@ -17,14 +17,15 @@ async function enter(page: Page) {
 
 test('WASD moves on both axes and FPS mouse look works without dragging', async ({ page }) => {
   // Eight real keyboard/camera round trips are slower with software WebGL on CI.
-  test.slow();
+  test.setTimeout(180000);
+  await page.setViewportSize({ width: 960, height: 600 });
   await enter(page);
   await page.getByRole('button', { name: 'Walk', exact: true }).click();
   await page.getByRole('button', { name: /Start walking/ }).click();
   await expect.poll(() => page.evaluate(() => Boolean(document.pointerLockElement))).toBe(true);
   // Flush Chromium's asynchronous cursor warp through rendered frames before
   // establishing the heading. Pointer lock itself becomes true before this event.
-  await page.mouse.move(640, 400);
+  await page.mouse.move(480, 300);
   await page.evaluate(
     () =>
       new Promise<void>((resolve) =>
@@ -48,7 +49,9 @@ test('WASD moves on both axes and FPS mouse look works without dragging', async 
     const before = (await camera(page))!;
     await page.keyboard.down(key);
     await expect
-      .poll(async () => ((await camera(page))![axis] - before[axis]) * direction)
+      .poll(async () => ((await camera(page))![axis] - before[axis]) * direction, {
+        timeout: 30000,
+      })
       .toBeGreaterThan(0.35);
     await page.keyboard.up(key);
   }
@@ -67,7 +70,9 @@ test('WASD moves on both axes and FPS mouse look works without dragging', async 
     const before = (await camera(page))!;
     await page.keyboard.down(key);
     await expect
-      .poll(async () => ((await camera(page))![axis] - before[axis]) * direction)
+      .poll(async () => ((await camera(page))![axis] - before[axis]) * direction, {
+        timeout: 30000,
+      })
       .toBeGreaterThan(0.35);
     await page.keyboard.up(key);
   }
@@ -86,8 +91,8 @@ test('WASD moves on both axes and FPS mouse look works without dragging', async 
         );
     });
   }, before.yaw);
-  for (const x of [700, 750, 800, 850]) {
-    await page.mouse.move(x, 440);
+  for (const x of [540, 590, 640, 690]) {
+    await page.mouse.move(x, 320);
   }
   await expect
     .poll(() => page.evaluate(() => Math.max(0, ...(window as any).mouseLookRotations)))
