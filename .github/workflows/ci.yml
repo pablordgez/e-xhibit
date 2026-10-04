@@ -24,7 +24,9 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      # Check pointer-lock inputs first so a browser regression fails promptly.
+      - run: npm run test:e2e -- --grep 'WASD moves'
+      - run: npm run test:e2e -- --grep-invert 'WASD moves'
       - run: npm run test:production
       - run: npm run worker:check
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

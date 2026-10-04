@@ -72,9 +72,25 @@ test('WASD moves on both axes and FPS mouse look works without dragging', async 
     await page.keyboard.up(key);
   }
   const before = (await camera(page))!;
-  await page.mouse.move(850, 440, { steps: 8 });
+  // Observe the real camera after the application's trusted pointer-event handler.
+  // Headless cursor recentering can cancel the net rotation of a whole gesture.
+  await page.evaluate(async (yaw) => {
+    const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+    const { Engine } = await import(module);
+    const canvas = document.querySelector('canvas.museum-canvas')!;
+    (window as any).mouseLookRotations = [];
+    canvas.addEventListener('pointermove', (event) => {
+      if (event.isTrusted && document.pointerLockElement === canvas)
+        (window as any).mouseLookRotations.push(
+          Math.abs(Engine.LastCreatedScene.activeCamera.rotation.y - yaw),
+        );
+    });
+  }, before.yaw);
+  for (const x of [700, 750, 800, 850]) {
+    await page.mouse.move(x, 440);
+  }
   await expect
-    .poll(async () => Math.abs((await camera(page))!.yaw - before.yaw))
+    .poll(() => page.evaluate(() => Math.max(0, ...(window as any).mouseLookRotations)))
     .toBeGreaterThan(0.05);
   await page.evaluate(() => document.exitPointerLock());
   await expect(page.getByRole('button', { name: /Start walking/ })).toBeVisible();
