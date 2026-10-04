@@ -41,7 +41,7 @@ On Windows, open **PowerShell**. On macOS or Linux, open **Terminal**. Run the c
 ### 1. Download the project
 
 ```sh
-git clone --branch v0.1.0 --depth 1 https://github.com/pablordgez/e-xhibit.git
+git clone --branch v0.1.1 --depth 1 https://github.com/pablordgez/e-xhibit.git
 cd e-xhibit
 npm ci
 ```
