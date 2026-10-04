@@ -489,7 +489,7 @@ describe('security regressions: uploads and budgets', () => {
       .filter((url) => url.includes('/museum_assets?'));
     expect(urls.every((url) => url.includes('id=in.('))).toBe(true);
   });
-  it('refuses to publish an old browser-validated upload before server revalidation', async () => {
+  it('saves private edits to registered legacy artwork but still refuses publication before server revalidation', async () => {
     const { asset } = uploadFixture();
     const ready = { ...asset, ready: true };
     tables.museum_assets.push({
@@ -500,7 +500,53 @@ describe('security regressions: uploads and budgets', () => {
     });
     const document = structuredClone(sample);
     document.assets.push(ready as any);
-    expect((await call('/draft', 'PUT', { document, revision: 0 })).status).toBe(422);
+    document.assets.at(-1)!.title = 'Updated legacy title';
+    expect((await call('/draft', 'PUT', { document, revision: 0 })).status).toBe(200);
+    expect(tables.museum_drafts[0].document.assets.at(-1).title).toBe('Updated legacy title');
+    expect((await call('/publish', 'POST', { revision: 1, previous: null })).status).toBe(422);
+    expect(await bucket.get('current.json')).toBeNull();
+    const forged = structuredClone(document);
+    forged.assets.at(-1)!.source = 'control/resources.json';
+    expect((await call('/draft', 'PUT', { document: forged, revision: 1 })).status).toBe(422);
+  });
+});
+
+describe('private image request budgets', () => {
+  it('batches 43 authorized images, isolates missing records, and retains short signed lifetimes', async () => {
+    const ids = Array.from({ length: 43 }, () => crypto.randomUUID());
+    tables.museum_assets = ids.map((id) => ({ id, ready: true }));
+    const missing = crypto.randomUUID();
+    const keys = [...ids, missing].map((id) => `variants/${id}/512`);
+    env.CREATE_LIMITER.limit = vi.fn(async () => ({ success: false }));
+    const response = await call('/media-urls?keys=' + encodeURIComponent(keys.join(',')));
+    expect(response.status).toBe(200);
+    const result = (await response.json()) as {
+      urls: { key: string; url: string }[];
+      expiresIn: number;
+    };
+    expect(result.urls).toHaveLength(43);
+    expect(result.expiresIn).toBe(240);
+    expect(result.urls.map((item: any) => item.key)).toEqual(keys.slice(0, 43));
+    for (const item of result.urls)
+      expect(new URL(item.url).searchParams.get('X-Amz-Expires')).toBe('300');
+    expect(env.CREATE_LIMITER.limit).not.toHaveBeenCalled();
+    expect((await call('/draft', 'PUT', { document: sample, revision: 0 })).status).toBe(429);
+    expect(tables.museum_drafts[0].revision).toBe(0);
+  });
+  it('rejects unauthorized, revoked, non-image and oversized signing batches', async () => {
+    const key = `variants/${crypto.randomUUID()}/512`;
+    expect((await call('/media-urls?keys=' + key, 'GET', undefined, false)).status).toBe(401);
+    expect((await call('/media-urls?keys=control/resources.json')).status).toBe(422);
+    expect((await call('/media-urls?keys=' + Array(51).fill(key).join(','))).status).toBe(422);
+    tables.museum_members = [];
+    expect((await call('/media-urls?keys=' + key)).status).toBe(403);
+  });
+  it('bounds authenticated reads independently and supplies a cooldown without touching edits', async () => {
+    env.AUTH_LIMITER.limit = async ({ key }) => ({ success: !key.startsWith('member-read:') });
+    const response = await call('/draft');
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('60');
+    expect((await call('/draft', 'PUT', { document: sample, revision: 0 })).status).toBe(200);
   });
 });
 describe('import image availability', () => {

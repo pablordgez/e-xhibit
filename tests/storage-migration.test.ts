@@ -1,18 +1,21 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { sample } from '../src/core/sample';
 
+const session = vi.hoisted(() => ({ token: 'test-session' }));
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
-    auth: { getSession: async () => ({ data: { session: { access_token: 'test-session' } } }) },
+    auth: { getSession: async () => ({ data: { session: { access_token: session.token } } }) },
   }),
 }));
 beforeEach(() => {
+  session.token = 'test-session';
   vi.resetModules();
   vi.stubEnv('VITE_SUPABASE_URL', 'https://auth.test');
   vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'public-test-key');
 });
 afterEach(() => vi.unstubAllGlobals());
 afterEach(() => vi.unstubAllEnvs());
+afterEach(() => vi.useRealTimers());
 
 function legacyDocument() {
   const document = structuredClone(sample),
@@ -135,5 +138,66 @@ it('propagates a concurrent-editor conflict rather than retrying against a newer
   );
   const { importDraft } = await import('../src/lib/storage');
   await expect(importDraft(sample, 7)).rejects.toMatchObject({ status: 409 });
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('saves a legacy title edit directly without depending on image preparation', async () => {
+  const document = legacyDocument();
+  document.assets[0].title = 'Puerta al mar updated';
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init: RequestInit = {}) => {
+      expect(path).toBe('/api/draft');
+      expect(JSON.parse(init.body as string)).toEqual({ document, revision: 7 });
+      return Response.json({ document, revision: 8, publication: null });
+    }),
+  );
+  const { saveDraft } = await import('../src/lib/storage');
+  expect((await saveDraft(document, 7)).document.assets[0].title).toBe('Puerta al mar updated');
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+it('reuses image signatures within a session and obtains new ones after the session changes', async () => {
+  const asset = legacyDocument().assets[0];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init: RequestInit = {}) => {
+      const key = new URL(path, 'https://museum.test').searchParams.get('keys')!;
+      const token = new Headers(init.headers).get('Authorization');
+      return Response.json({ urls: [{ key, url: token }], expiresIn: 240 });
+    }),
+  );
+  const { assetUrl } = await import('../src/lib/storage');
+  expect(await assetUrl(asset, '512')).toBe('Bearer test-session');
+  expect(await assetUrl({ ...asset, title: 'New title' }, '512')).toBe('Bearer test-session');
+  expect(fetch).toHaveBeenCalledTimes(1);
+  session.token = 'another-session';
+  expect(await assetUrl(asset, '512')).toBe('Bearer another-session');
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it('waits for a rate-limit cooldown once, retaining the revision, and never retries a conflict', async () => {
+  vi.useFakeTimers();
+  const replies = [
+    Response.json({ error: 'Busy' }, { status: 429, headers: { 'Retry-After': '1' } }),
+    Response.json({ document: sample, revision: 8, publication: null }),
+  ];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => replies.shift()!),
+  );
+  const { saveDraft } = await import('../src/lib/storage');
+  const saving = saveDraft(sample, 7);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect((await saving).revision).toBe(8);
+  expect(fetch).toHaveBeenCalledTimes(2);
+  for (const [, init] of vi.mocked(fetch).mock.calls)
+    expect(JSON.parse(init!.body as string).revision).toBe(7);
+  vi.mocked(fetch)
+    .mockClear()
+    .mockImplementation(async () => Response.json({ error: 'Conflict' }, { status: 409 }));
+  await expect(saveDraft(sample, 7)).rejects.toMatchObject({ status: 409 });
   expect(fetch).toHaveBeenCalledTimes(1);
 });

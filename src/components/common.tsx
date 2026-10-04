@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { assetUrl } from '../lib/storage';
+import { assetUrl, invalidateAssetUrl } from '../lib/storage';
 import { type Asset } from '../core/model';
 export function Image({
   asset,
@@ -9,8 +9,16 @@ export function Image({
   ...props
 }: { asset: Asset; size?: string } & React.ImgHTMLAttributes<HTMLImageElement>) {
   const [url, setUrl] = useState('');
+  const [retry, setRetry] = useState(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const attempts = useRef(0);
+  const key = size === 'original' ? asset.source : (asset.variants[size] ?? asset.variants['1024']);
+  useEffect(() => {
+    attempts.current = 0;
+  }, [key]);
   useEffect(() => {
     let active = true;
+    setUrl('');
     assetUrl(asset, size)
       .then((url) => {
         if (active) setUrl(url);
@@ -20,10 +28,26 @@ export function Image({
       });
     return () => {
       active = false;
+      clearTimeout(retryTimer.current);
     };
-  }, [asset, size]);
+  }, [key, retry]);
   return url ? (
-    <img {...props} src={url} alt={props.alt ?? asset.title} loading="lazy" />
+    <img
+      {...props}
+      src={url}
+      alt={props.alt ?? asset.title}
+      loading="lazy"
+      onError={(event) => {
+        props.onError?.(event);
+        setUrl('');
+        if (attempts.current++ === 0) {
+          retryTimer.current = setTimeout(() => {
+            invalidateAssetUrl(asset, size);
+            setRetry((value) => value + 1);
+          }, 1100);
+        }
+      }}
+    />
   ) : (
     <span className="image-missing">Image unavailable</span>
   );

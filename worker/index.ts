@@ -181,13 +181,15 @@ async function switchCurrent(env: Env, id: string, previous: string | null) {
       'Another publication won the race. Your earlier public version remains available.',
     );
 }
-async function signed(env: Env, key: string) {
-  const client = new AwsClient({
+function signingClient(env: Env) {
+  return new AwsClient({
     accessKeyId: env.R2_ACCESS_KEY_ID,
     secretAccessKey: env.R2_SECRET_ACCESS_KEY,
     service: 's3',
     region: 'auto',
   });
+}
+async function signed(env: Env, key: string, client = signingClient(env)) {
   const url = new URL(
     `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${env.R2_BUCKET_NAME}/${key}`,
   );
@@ -215,7 +217,7 @@ function mediaResponse(object: R2ObjectBody, download?: string) {
     );
   return new Response(object.body, { headers });
 }
-async function validateAssets(env: Env, doc: MuseumDocument) {
+async function validateAssets(env: Env, doc: MuseumDocument, requireDecoded = true) {
   const builtins = new Map(sample.assets.map((a) => [a.id, a]));
   const uploaded = new Map<string, Asset>();
   const storedSizes = new Map<string, number>();
@@ -229,9 +231,16 @@ async function validateAssets(env: Env, doc: MuseumDocument) {
       );
       if (!rows.length) break;
       for (const r of rows)
-        if (validatedFiles(r.files)) {
+        if (
+          (validatedFiles(r.files) || !requireDecoded) &&
+          r.asset?.source === `originals/${r.id}` &&
+          Object.keys(r.asset.variants ?? {}).length === 3 &&
+          ['512', '1024', '2048'].every(
+            (size) => r.asset.variants[size] === `variants/${r.id}/${size}`,
+          )
+        ) {
           uploaded.set(r.id, r.asset);
-          const size = r.files.reduce((sum: number, f: any) => sum + f.bytes, 0);
+          const size = (r.files ?? []).reduce((sum: number, f: any) => sum + f.bytes, 0);
           storedSizes.set(
             r.id,
             Number.isSafeInteger(size) && size > 0 ? size : r.asset.bytes + 27_000_000,
@@ -342,6 +351,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     ['^/api/uploads/[\\w-]+/(file|master)$', 'PUT'],
     ['^/api/asset-status$', 'GET'],
     ['^/api/media-url$', 'GET'],
+    ['^/api/media-urls$', 'GET'],
     ['^/api/usage$', 'GET'],
     ['^/api/members$', 'GET|POST'],
     ['^/api/members/[\\w-]+$', 'DELETE'],
@@ -358,8 +368,15 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   )
     throw new HttpError(429, 'Too many requests. Try again shortly.');
   const user = await identity(request, env);
-  if (!(await env.CREATE_LIMITER.limit({ key: user.user_id })).success)
-    throw new HttpError(429, 'Too many editing requests. Try again shortly.');
+  const mutation =
+    !['GET', 'HEAD'].includes(method) ||
+    (path === '/api/asset-status' && url.searchParams.get('check-files') === '1');
+  if (mutation) {
+    if (!(await env.CREATE_LIMITER.limit({ key: user.user_id })).success)
+      throw new HttpError(429, 'Too many editing requests. Try again shortly.');
+  } else if (!(await env.AUTH_LIMITER.limit({ key: `member-read:${user.user_id}` })).success) {
+    throw new HttpError(429, 'Too many image or studio reads. Try again shortly.');
+  }
   if (
     !['GET', 'HEAD'].includes(method) &&
     request.headers.get('Origin') &&
@@ -395,7 +412,9 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       const input = z
         .object({ document: museumSchema, revision: z.number().int().nonnegative() })
         .parse(await body(request, 8 * 1024 * 1024));
-      await validateAssets(env, input.document);
+      // Private metadata edits may retain registered legacy images. Publication
+      // still requires full server decoding; saving must not depend on that work.
+      await validateAssets(env, input.document, false);
       const rows = await db(env, `museum_drafts?id=eq.true&revision=eq.${input.revision}`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -832,6 +851,42 @@ export async function handle(request: Request, env: Env): Promise<Response> {
         ),
       );
     }
+    if (path === '/api/media-urls' && method === 'GET') {
+      const keys = [
+        ...new Set(
+          z
+            .array(
+              z
+                .string()
+                .max(150)
+                .regex(/^(variants\/[\w-]+\/(512|1024|2048)|originals\/[\w-]+)$/),
+            )
+            .min(1)
+            .max(50)
+            .parse((url.searchParams.get('keys') ?? '').split(',')),
+        ),
+      ];
+      const ids = [...new Set(keys.map((key) => key.split('/')[1]))];
+      const ready = new Set<string>();
+      for (let offset = 0; offset < ids.length;) {
+        const rows = await db(
+          env,
+          `museum_assets?id=in.(${ids.join(',')})&ready=eq.true&select=id&order=id.asc&limit=50&offset=${offset}`,
+        );
+        if (!rows.length) break;
+        rows.forEach((row: any) => ready.add(row.id));
+        offset += rows.length;
+      }
+      const client = signingClient(env);
+      return json({
+        urls: await Promise.all(
+          keys
+            .filter((key) => ready.has(key.split('/')[1]))
+            .map(async (key) => ({ key, url: await signed(env, key, client) })),
+        ),
+        expiresIn: 240,
+      });
+    }
     if (path === '/api/media-url' && method === 'GET') {
       const key = url.searchParams.get('key') ?? '';
       if (!/^(variants\/[\w-]+\/(512|1024|2048)|originals\/[\w-]+)$/.test(key))
@@ -985,7 +1040,12 @@ export default {
     } catch (e) {
       if (e instanceof z.ZodError)
         return json({ error: 'Invalid museum data.', issues: e.issues.slice(0, 100) }, 422);
-      if (e instanceof HttpError) return json({ error: e.message }, e.status);
+      if (e instanceof HttpError)
+        return json(
+          { error: e.message },
+          e.status,
+          e.status === 429 ? { 'Retry-After': '60' } : {},
+        );
       console.error('Request failed', e instanceof Error ? e.message : 'Unknown error');
       return json(
         { error: 'The request failed. Reload to check the latest state before retrying.' },

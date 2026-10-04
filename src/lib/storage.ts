@@ -3,6 +3,7 @@ import { museumSchema, type MuseumDocument, type Asset } from '../core/model';
 import { sample } from '../core/sample';
 import { publicDocument } from '../core/publication';
 import { validateMuseumImport } from '../core/documentImport';
+import { mediaCache } from './mediaCache';
 export const cloudConfigured = Boolean(
   import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY,
 );
@@ -27,8 +28,10 @@ async function prepareExistingImages(document: MuseumDocument) {
   const assets = document.assets.filter((asset) => /^originals\/[\w-]+$/.test(asset.source));
   for (let offset = 0; offset < assets.length; offset += 50) {
     const group = assets.slice(offset, offset + 50);
-    const statuses = await api<{ id: string; validated: boolean }[]>(
-      '/asset-status?ids=' + group.map((asset) => asset.id).join(','),
+    const statuses = await retryLimited(() =>
+      api<{ id: string; validated: boolean }[]>(
+        '/asset-status?ids=' + group.map((asset) => asset.id).join(','),
+      ),
     );
     for (const asset of group) {
       if (statuses.find((status) => status.id === asset.id)?.validated) continue;
@@ -36,10 +39,12 @@ async function prepareExistingImages(document: MuseumDocument) {
       if (!pending) {
         pending = (async () => {
           try {
-            await api('/uploads/revalidate', {
-              method: 'POST',
-              body: JSON.stringify({ id: asset.id }),
-            });
+            await retryLimited(() =>
+              api('/uploads/revalidate', {
+                method: 'POST',
+                body: JSON.stringify({ id: asset.id }),
+              }),
+            );
           } catch (error) {
             throw Error(
               `Existing artwork “${asset.title}” could not be prepared: ${(error as Error).message}`,
@@ -70,9 +75,23 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
     const data = (await response.json().catch(() => ({ error: response.statusText }))) as {
       error?: string;
     };
-    throw Object.assign(Error(data.error ?? 'Request failed'), { status: response.status });
+    throw Object.assign(Error(data.error ?? 'Request failed'), {
+      status: response.status,
+      retryAfter:
+        Math.min(65, Math.max(1, Number(response.headers.get('Retry-After')) || 60)) * 1000,
+    });
   }
   return (response.status === 204 ? null : await response.json()) as T;
+}
+async function retryLimited<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    const limited = error as { status?: number; retryAfter?: number };
+    if (limited.status !== 429) throw error;
+    await new Promise((resolve) => setTimeout(resolve, limited.retryAfter ?? 60_000));
+    return operation();
+  }
 }
 export async function getDraft(): Promise<Snapshot> {
   if (!demo) return api('/draft');
@@ -91,8 +110,9 @@ export async function getDraft(): Promise<Snapshot> {
 export async function saveDraft(document: MuseumDocument, revision: number): Promise<Snapshot> {
   museumSchema.parse(document);
   if (!demo) {
-    await prepareExistingImages(document);
-    return api('/draft', { method: 'PUT', body: JSON.stringify({ document, revision }) });
+    return retryLimited(() =>
+      api('/draft', { method: 'PUT', body: JSON.stringify({ document, revision }) }),
+    );
   }
   const current = await getDraft();
   if (current.revision !== revision)
@@ -227,6 +247,14 @@ export async function putBlob(key: string, value: Blob) {
   });
 }
 const blobUrls = new Map<string, string>();
+const privateUrls = mediaCache((keys) =>
+  retryLimited(() => api('/media-urls?keys=' + encodeURIComponent(keys.join(',')))),
+);
+let privateSession: string | undefined;
+export function invalidateAssetUrl(asset: Asset, size = '512') {
+  const key = size === 'original' ? asset.source : (asset.variants[size] ?? asset.variants['1024']);
+  privateUrls.invalidate(key);
+}
 export async function assetUrl(asset: Asset, size = '1024'): Promise<string> {
   const key = size === 'original' ? asset.source : (asset.variants[size] ?? asset.variants['1024']);
   if (key.startsWith('/art/')) return key;
@@ -244,7 +272,12 @@ export async function assetUrl(asset: Asset, size = '1024'): Promise<string> {
     return url;
   }
   if (key.startsWith('published/')) return `/api/media/${encodeURIComponent(key)}`;
-  return (await api<{ url: string }>(`/media-url?key=${encodeURIComponent(key)}`)).url;
+  const session = (await supabase?.auth.getSession())?.data.session?.access_token ?? '';
+  if (privateSession !== session) {
+    privateUrls.clear();
+    privateSession = session;
+  }
+  return privateUrls.get(key);
 }
 export function exportDocument(document: MuseumDocument) {
   const blob = new Blob([JSON.stringify(document, null, 2)], { type: 'application/json' }),

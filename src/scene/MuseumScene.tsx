@@ -41,7 +41,7 @@ import {
   type MuseumDocument,
   type Vec,
 } from '../core/model';
-import { assetUrl } from '../lib/storage';
+import { assetUrl, invalidateAssetUrl } from '../lib/storage';
 export type SceneAction = { kind: 'art' | 'book' | 'shop'; id: string; narrate?: boolean };
 type Props = {
   doc: MuseumDocument;
@@ -784,6 +784,7 @@ export default function MuseumScene({
                 },
                 () => {
                   texture.dispose();
+                  invalidateAssetUrl(a, size);
                   failed();
                 },
               );

@@ -68,7 +68,11 @@ export function useMuseum() {
       try {
         const next = await saveDraft(doc, current.revision);
         snapshot.current = next;
-        setStatus('All changes saved');
+        setStatus(
+          JSON.stringify(docRef.current) === JSON.stringify(next.document)
+            ? 'All changes saved'
+            : 'Unsaved changes',
+        );
         setError('');
         return next;
       } catch (e) {
