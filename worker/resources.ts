@@ -108,6 +108,37 @@ export async function completeUpload(env: Env, id: string, actual: number) {
   });
 }
 
+/** Called only after verifying a registered, ready artwork needs revalidation.
+ * Reuse pending allocation; completed allocation remains charged separately.
+ * Existing artworks do not consume another asset slot when preparation retries.
+ */
+export async function reserveRevalidation(env: Env, id: string, user: string, bytes: number) {
+  return resources(env, (state) => {
+    const previous = state.uploads[id];
+    if (previous && !previous.complete && previous.expires > Date.now() && previous.user !== user)
+      throw new HttpError(403, 'Another editor is validating this image.');
+    const active = Object.entries(state.uploads)
+      .filter(([key, item]) => key !== id && !item.complete)
+      .map(([, item]) => item);
+    if (active.length >= 16 || active.filter((item) => item.user === user).length >= 4)
+      throw new HttpError(
+        429,
+        'Too many unfinished uploads or publications. Wait for cleanup or finish the existing work.',
+      );
+    const allocation = previous && !previous.complete ? Math.max(previous.bytes, bytes) : bytes;
+    const extra = allocation - (previous && !previous.complete ? previous.bytes : 0);
+    const limit = Number(env.MAX_STORAGE_BYTES ?? 20 * 1024 ** 3);
+    if (!Number.isSafeInteger(limit) || limit < 1)
+      throw new HttpError(503, 'Invalid storage budget configuration.');
+    if (extra > 0 && state.bytes + extra > limit)
+      throw new HttpError(413, 'The museum storage budget has been reached.');
+    state.bytes += extra;
+    const next = { bytes: allocation, user, expires: Date.now() + RESOURCE_TTL };
+    state.uploads[id] = next;
+    return next;
+  });
+}
+
 export async function reservation(env: Env, kind: 'uploads' | 'jobs', id: string) {
   const stored = await env.MUSEUM.get(KEY);
   const item = stored ? (await stored.json<Resources>())[kind][id] : undefined;
@@ -116,10 +147,16 @@ export async function reservation(env: Env, kind: 'uploads' | 'jobs', id: string
   return item;
 }
 
-export async function settle(env: Env, kind: 'uploads' | 'jobs', id: string, actual?: number) {
+export async function settle(
+  env: Env,
+  kind: 'uploads' | 'jobs',
+  id: string,
+  actual?: number,
+  expectedExpires?: number,
+) {
   await resources(env, (state) => {
     const item = state[kind][id];
-    if (!item) return;
+    if (!item || (expectedExpires !== undefined && item.expires !== expectedExpires)) return;
     // Without actual bytes, release everything after cleanup has deleted the objects.
     state.bytes -= item.bytes - (actual ?? 0);
     if (actual === undefined) {

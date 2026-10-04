@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import worker, { cleanup, type Env } from '../worker/index';
 import { sample } from '../src/core/sample';
 import { publicDocument } from '../src/core/publication';
-import { reserve, completeUpload } from '../worker/resources';
+import { reserve, completeUpload, reserveRevalidation, reservation } from '../worker/resources';
 type Stored = { bytes: Uint8Array; etag: string; metadata: any; uploaded: Date };
 class Bucket {
   items = new Map<string, Stored>();
@@ -242,6 +242,114 @@ describe('Supabase API key compatibility', () => {
   });
 });
 
+describe('existing artwork preparation leases', () => {
+  async function state() {
+    return (await bucket.get('control/resources.json'))!.json();
+  }
+  async function expire(id: string) {
+    const saved = await state();
+    saved.uploads[id].expires = Date.now() - 26 * 60 * 60 * 1000;
+    await bucket.put('control/resources.json', JSON.stringify(saved));
+    return saved;
+  }
+  it('renews expired preparation without charging its allocation or asset slot again, including concurrent retries', async () => {
+    const id = crypto.randomUUID();
+    await reserve(env, 'uploads', id, owner, 1000);
+    await expire(id);
+    await expect(reservation(env, 'uploads', id)).rejects.toMatchObject({ status: 410 });
+    await Promise.all(Array.from({ length: 8 }, () => reserveRevalidation(env, id, owner, 1000)));
+    expect((await reservation(env, 'uploads', id)).expires).toBeGreaterThan(Date.now());
+    expect(await state()).toMatchObject({ bytes: 1000, assets: 1 });
+    expect(Object.keys((await state()).uploads)).toEqual([id]);
+  });
+  it('retains completed storage charges and reserves new preparation only once', async () => {
+    const id = crypto.randomUUID();
+    await reserve(env, 'uploads', id, owner, 1000);
+    await completeUpload(env, id, 500);
+    await reserveRevalidation(env, id, owner, 1000);
+    await reserveRevalidation(env, id, owner, 1000);
+    expect(await state()).toMatchObject({ bytes: 1500, assets: 1 });
+    expect((await reservation(env, 'uploads', id)).complete).toBeUndefined();
+  });
+  it('protects another editor’s active preparation but lets an authorized editor retry an expired lease', async () => {
+    const id = crypto.randomUUID();
+    await reserve(env, 'uploads', id, 'other-editor', 1000);
+    await expect(reserveRevalidation(env, id, owner, 1000)).rejects.toMatchObject({ status: 403 });
+    await expire(id);
+    await reserveRevalidation(env, id, owner, 1000);
+    expect((await reservation(env, 'uploads', id)).user).toBe(owner);
+    expect((await state()).bytes).toBe(1000);
+  });
+  it('enforces storage top-ups and member concurrency limits while allowing already reserved bytes', async () => {
+    const id = crypto.randomUUID();
+    await reserve(env, 'uploads', id, owner, 1000);
+    env.MAX_STORAGE_BYTES = '999';
+    await reserveRevalidation(env, id, owner, 1000);
+    await expect(reserveRevalidation(env, id, owner, 1001)).rejects.toMatchObject({ status: 413 });
+    expect((await state()).bytes).toBe(1000);
+    env.MAX_STORAGE_BYTES = '10000';
+    await reserveRevalidation(env, id, owner, 1500);
+    expect((await state()).bytes).toBe(1500);
+    for (let i = 0; i < 3; i++) await reserve(env, 'uploads', crypto.randomUUID(), owner, 1000);
+    await reserveRevalidation(env, id, owner, 1500);
+    await expect(reserveRevalidation(env, crypto.randomUUID(), owner, 1000)).rejects.toMatchObject({
+      status: 429,
+    });
+    env.MAX_STORAGE_BYTES = 'invalid';
+    await expect(reserveRevalidation(env, id, owner, 1500)).rejects.toMatchObject({ status: 503 });
+  });
+  it('retains a renewed ready-artwork lease when cleanup started from an older snapshot', async () => {
+    const { asset, files, bytes } = uploadFixture();
+    tables.museum_assets.push({
+      id: asset.id,
+      ready: true,
+      asset: { ...asset, ready: true },
+      files,
+      created_by: owner,
+    });
+    await bucket.put(asset.source, bytes);
+    for (const key of Object.values(asset.variants)) await bucket.put(key, bytes);
+    await bucket.put('staging/' + asset.source, bytes);
+    await reserveRevalidation(env, asset.id, owner, 1000);
+    const before = await expire(asset.id);
+    const original = fetchMock.getMockImplementation() as (
+      input: string,
+      init: RequestInit,
+    ) => Promise<Response>;
+    let renewed = false;
+    fetchMock.mockImplementation(async (input: string, init: RequestInit = {}) => {
+      if (!renewed && new URL(input).searchParams.get('id') === 'eq.' + asset.id) {
+        renewed = true;
+        await reserveRevalidation(env, asset.id, owner, 1000);
+      }
+      return original(input, init);
+    });
+    await cleanup(env);
+    expect(renewed).toBe(true);
+    expect((await reservation(env, 'uploads', asset.id)).expires).toBeGreaterThan(Date.now());
+    expect(await state()).toMatchObject({ bytes: before.bytes, assets: before.assets });
+    expect(bucket.items.has('staging/' + asset.source)).toBe(false);
+    for (const key of [asset.source, ...Object.values(asset.variants)])
+      expect(bucket.items.has(key)).toBe(true);
+    expect(tables.museum_assets[0].ready).toBe(true);
+    await cleanup(env);
+    expect((await state()).uploads[asset.id]).toBeDefined();
+  });
+  it('retains the global preparation limit and keeps publication expiry enforced', async () => {
+    for (let i = 0; i < 16; i++)
+      await reserve(env, 'uploads', crypto.randomUUID(), 'editor-' + i, 1000);
+    await expect(reserveRevalidation(env, crypto.randomUUID(), owner, 1000)).rejects.toMatchObject({
+      status: 429,
+    });
+    const id = crypto.randomUUID();
+    await reserve(env, 'jobs', id, owner, 1000);
+    const saved = await state();
+    saved.jobs[id].expires = Date.now() - 1;
+    await bucket.put('control/resources.json', JSON.stringify(saved));
+    await expect(reservation(env, 'jobs', id)).rejects.toMatchObject({ status: 410 });
+  });
+});
+
 describe('security regressions: uploads and budgets', () => {
   it('accepts large originals with a bounded canonical master, and rejects missing or invalid master declarations', async () => {
     const { asset } = uploadFixture();
@@ -460,6 +568,10 @@ describe('security regressions: uploads and budgets', () => {
     state.uploads[asset.id].expires = Date.now() - 26 * 60 * 60 * 1000;
     await bucket.put('control/resources.json', JSON.stringify(state));
     expect((await call('/uploads/complete', 'POST', { id: asset.id })).status).toBe(410);
+    expect((await call('/uploads/revalidate', 'POST', { id: asset.id })).status).toBe(422);
+    expect(
+      (await (await bucket.get('control/resources.json'))!.json()).uploads[asset.id].expires,
+    ).toBe(state.uploads[asset.id].expires);
     await cleanup(env);
     expect(bucket.items.has('staging/' + asset.source)).toBe(false);
     expect(tables.museum_assets).toHaveLength(0);

@@ -5,6 +5,7 @@ import { randomFillSync } from 'node:crypto';
 import { build } from 'esbuild';
 import sharp from 'sharp';
 import { sample } from '../src/core/sample';
+import type { Resources } from '../worker/resources';
 
 // Real workerd, R2 CAS and local Images decoder; Supabase alone is a local HTTP fixture.
 const owner = '00000000-0000-4000-8000-000000000001';
@@ -144,6 +145,17 @@ it('uploads and migrates originals above 20 MB using native Images and a browser
         asset,
         files: [{ key: asset.source, bytes: original.length, mime: 'image/jpeg' }],
       });
+      // A failed legacy preparation can leave an expired allocation until scheduled cleanup.
+      const ledger = (await (await bucket.get('control/resources.json'))!.json()) as Resources;
+      const allocation = asset.bytes * 2 + 27_004_096;
+      ledger.bytes += allocation;
+      ledger.assets++;
+      ledger.uploads[id] = {
+        bytes: allocation,
+        user: owner,
+        expires: Date.now() - 26 * 60 * 60 * 1000,
+      };
+      await bucket.put('control/resources.json', JSON.stringify(ledger));
     } else {
       expect(
         (
@@ -177,6 +189,12 @@ it('uploads and migrates originals above 20 MB using native Images and a browser
     }
     const response = await call(legacy ? '/uploads/revalidate' : '/uploads/complete', { id });
     expect(response.status, await response.text()).toBe(200);
+    if (legacy) {
+      const ledger = (await (await bucket.get('control/resources.json'))!.json()) as Resources;
+      expect(ledger.uploads[id].expires).toBeGreaterThan(Date.now());
+      expect(ledger.uploads[id].complete).toBe(true);
+      expect(ledger.assets).toBe(2);
+    }
     expect(JSON.stringify(document)).toBe(before);
     expect(tables.museum_assets.find((row) => row.id === id).asset).toEqual({
       ...asset,

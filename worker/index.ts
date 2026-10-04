@@ -6,7 +6,14 @@ import { sample } from '../src/core/sample';
 import { publicDocument } from '../src/core/publication';
 import { imageDimensions } from '../src/core/imageMetadata';
 import { HttpError, body } from './http';
-import { resources, reserve, reservation, settle, completeUpload } from './resources';
+import {
+  resources,
+  reserve,
+  reserveRevalidation,
+  reservation,
+  settle,
+  completeUpload,
+} from './resources';
 import { uploadLimits, receiveOriginal } from './uploads';
 import { trustedVariants, validatedFiles } from './imageValidation';
 import { workQueue } from './workQueue';
@@ -711,14 +718,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
           ['512', '1024', '2048'].some((s) => a.variants[s] !== `variants/${id}/${s}`)
         )
           throw new HttpError(422, 'This legacy asset needs a new upload.');
-        const existing = await env.MUSEUM.get('control/resources.json');
-        const pending = existing
-          ? (await existing.json<import('./resources').Resources>()).uploads[id]
-          : undefined;
-        if (pending) {
-          if (pending.user !== user.user_id)
-            throw new HttpError(403, 'Another editor is validating this image.');
-        } else await reserve(env, 'uploads', id, user.user_id, a.bytes * 2 + 27_004_096);
+        await reserveRevalidation(env, id, user.user_id, a.bytes * 2 + 27_004_096);
       }
       await reservation(env, 'uploads', id);
       const file = record.files[0],
@@ -1033,7 +1033,9 @@ export async function cleanup(env: Env) {
       ]);
       await db(env, `museum_assets?id=eq.${id}&ready=eq.false`, { method: 'DELETE' });
     }
-    await settle(env, 'uploads', id, item.bytes);
+    // A ready artwork can restart preparation after the cleanup snapshot was read.
+    // Its staging objects are disposable; retain the newer allocation and lease.
+    await settle(env, 'uploads', id, item.bytes, item.expires);
   }
   for (const [id, item] of Object.entries(snapshot.jobs)
     .filter(([, item]) => item.expires < cutoff)
