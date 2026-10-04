@@ -29,8 +29,6 @@ export interface Env {
   CREATE_LIMITER: RateLimit;
   MAX_STORAGE_BYTES?: string;
   MAX_UPLOAD_BYTES?: string;
-  IMAGE_PROCESSOR_URL?: string;
-  IMAGE_PROCESSOR_TOKEN?: string;
   MAX_IMAGE_PIXELS?: string;
   LEGACY_ASSET_ORIGIN?: string;
 }
@@ -627,7 +625,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
         throw new HttpError(422, 'Invalid image dimensions, upload keys or metadata.');
       if ((await db(env, `museum_assets?id=eq.${a.id}&select=id`)).length)
         throw new HttpError(409, 'Upload already exists. Retry with a new image upload.');
-      if (a.bytes > 20_000_000 && !limits.largeDecoder && !input.files[1])
+      if (a.bytes > 20_000_000 && !input.files[1])
         throw new HttpError(
           503,
           'A display master is required for large originals. Reload the studio and try again.',
@@ -731,7 +729,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       )
         throw new HttpError(422, 'Original image dimensions or format do not match.');
       const master =
-        revalidate && !env.IMAGE_PROCESSOR_URL && object.size > 20_000_000
+        revalidate && object.size > 20_000_000
           ? await env.MUSEUM.get(a.variants['2048'])
           : !revalidate && record.files[1]
             ? await env.MUSEUM.get('staging/' + record.files[1].key)

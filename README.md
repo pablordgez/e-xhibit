@@ -22,7 +22,7 @@ The included **Still / Life** sample exhibition uses original geometric illustra
 
 ## Deploy your own exhibition
 
-These instructions create a new installation. You do not need to run a server yourself: Cloudflare hosts the website and its API, private Cloudflare R2 buckets store the files, and Supabase provides sign-in and the database. Image preparation uses the Cloudflare Images binding included in the Worker configuration; no separate image-processor deployment is needed.
+These instructions create a new installation. You do not need to run a server yourself: Cloudflare hosts the website, its API and image processing, private Cloudflare R2 buckets store the files, and Supabase provides sign-in and the database. Image preparation uses the Cloudflare Images binding included in the Worker configuration.
 
 ### Before you start
 
@@ -157,7 +157,7 @@ Keep values inside quotes, as in the supplied file. A 20 MB upload limit would b
 
 Keep the `IMAGES`, `MUSEUM`, `DISPLAY`, `AUTH_LIMITER`, `CREATE_LIMITER` and scheduled-cleanup configuration. If other Workers in this account use rate-limit namespace IDs `1001` or `1002`, choose two unused, distinct IDs instead. If Wrangler asks which account to deploy to, select the account containing your R2 buckets; you can also set its Account ID in a top-level `account_id` field.
 
-The browser prepares a small display master automatically, and Cloudflare decodes it and generates display images up to 2048 pixels on the longest edge. The original file remains unchanged in private R2 storage. Originals above 20 MB work with this flow; Cloudflare's decoder receives the small master. The optional `image-processor/` service is unnecessary for this installation, so leave `IMAGE_PROCESSOR_URL` and `IMAGE_PROCESSOR_TOKEN` unset. The [Images binding](https://developers.cloudflare.com/images/optimization/binding/) is deployed with the Worker.
+The browser prepares a small display master automatically, and Cloudflare decodes it and generates display images up to 2048 pixels on the longest edge. The original file remains unchanged in private R2 storage. Originals above 20 MB work with this flow; Cloudflare's decoder receives the small master. The [Images binding](https://developers.cloudflare.com/images/optimization/binding/) is deployed with the Worker.
 
 #### What the 20 GiB storage budget means
 

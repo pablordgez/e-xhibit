@@ -9,31 +9,7 @@ export function uploadLimits(env: Env) {
     throw new HttpError(503, 'MAX_UPLOAD_BYTES must be between 1 and 500000000.');
   if (!Number.isSafeInteger(pixels) || pixels < 1 || pixels > 100_000_000)
     throw new HttpError(503, 'MAX_IMAGE_PIXELS must be between 1 and 100000000.');
-  if (env.IMAGE_PROCESSOR_URL || env.IMAGE_PROCESSOR_TOKEN) {
-    let endpoint: URL;
-    try {
-      endpoint = new URL(env.IMAGE_PROCESSOR_URL ?? '');
-    } catch {
-      throw new HttpError(503, 'Invalid image processor configuration.');
-    }
-    if (
-      endpoint.protocol !== 'https:' ||
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.search ||
-      endpoint.hash ||
-      (env.IMAGE_PROCESSOR_TOKEN?.length ?? 0) < 32
-    )
-      throw new HttpError(
-        503,
-        'Configure a trusted HTTPS image processor and a secret token of at least 32 characters.',
-      );
-  }
-  return {
-    bytes,
-    pixels,
-    largeDecoder: Boolean(env.IMAGE_PROCESSOR_URL && env.IMAGE_PROCESSOR_TOKEN),
-  };
+  return { bytes, pixels };
 }
 
 /** Multipart parts stay uncommitted until the exact byte count passes. Abort on any failure. */

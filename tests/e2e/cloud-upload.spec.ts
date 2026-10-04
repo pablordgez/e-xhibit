@@ -115,4 +115,26 @@ test('cloud uploads automatically resize an original above 20 MB and preserve it
     '/api/uploads/complete',
   ]);
   expect(result.messages).toContain('Preparing display versions…');
+
+  // Camera rotation must survive the browser master path, while metadata stays
+  // in the untouched private original rather than the inline display image.
+  const cameraOriginal = await sharp({
+    create: { width: 32, height: 16, channels: 3, background: '#ab34cd' },
+  })
+    .withMetadata({ orientation: 6 })
+    .jpeg()
+    .toBuffer();
+  const cameraAsset = await page.evaluate(async (encoded) => {
+    const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+    return (window as any).cloudImages.uploadImage(
+      new File([bytes], 'camera-rotation.jpg', { type: 'image/jpeg' }),
+      () => {},
+    );
+  }, Buffer.from(cameraOriginal).toString('base64'));
+  expect(original).toEqual(cameraOriginal);
+  expect(cameraAsset).toMatchObject({ width: 16, height: 32, ready: true });
+  const cameraMaster = await sharp(master!).metadata();
+  expect(cameraMaster).toMatchObject({ format: 'webp', width: 16, height: 32 });
+  expect(cameraMaster.exif).toBeUndefined();
+  expect(cameraMaster.orientation).toBeUndefined();
 });

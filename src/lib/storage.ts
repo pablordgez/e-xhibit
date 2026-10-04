@@ -14,9 +14,9 @@ export const supabase = cloudConfigured
   ? createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY)
   : null;
 export type Snapshot = { document: MuseumDocument; revision: number; publication: string | null };
-let limitRequest: Promise<{ bytes: number; pixels: number; largeDecoder: boolean }> | undefined;
+let limitRequest: Promise<{ bytes: number; pixels: number }> | undefined;
 export function imageUploadLimits() {
-  if (demo) return Promise.resolve({ bytes: 100_000_000, pixels: 100_000_000, largeDecoder: true });
+  if (demo) return Promise.resolve({ bytes: 100_000_000, pixels: 100_000_000 });
   return (limitRequest ??= api('/limits').catch((error) => {
     limitRequest = undefined;
     throw error;

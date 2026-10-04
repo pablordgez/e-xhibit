@@ -2,7 +2,6 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { createServer } from 'node:http';
 import { Miniflare, convertV4MiniflareOptions, type V4MiniflareOptions } from 'miniflare';
 import { randomFillSync } from 'node:crypto';
-import { createProcessor } from '../image-processor/server.mjs';
 import { build } from 'esbuild';
 import sharp from 'sharp';
 import { sample } from '../src/core/sample';
@@ -47,7 +46,6 @@ const provider = createServer(async (request, response) => {
   response.end(JSON.stringify(rows));
 });
 let runtime: Miniflare;
-let runtimeOptions: V4MiniflareOptions;
 beforeAll(async () => {
   await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
   const address = provider.address() as { port: number };
@@ -58,7 +56,7 @@ beforeAll(async () => {
     format: 'esm',
     platform: 'browser',
   });
-  runtimeOptions = {
+  const runtimeOptions: V4MiniflareOptions = {
     name: 'museum',
     modules: true,
     script: bundle.outputFiles[0].text,
@@ -79,143 +77,6 @@ beforeAll(async () => {
   runtime = new Miniflare(convertV4MiniflareOptions(runtimeOptions));
 }, 30_000);
 
-it('migrates a large existing original without changing its ID, metadata or exhibit placements', async () => {
-  const token = crypto.randomUUID() + crypto.randomUUID();
-  const decoder = createProcessor({ token, maxBytes: 80_000_000 });
-  await new Promise<void>((resolve) => decoder.listen(0, '127.0.0.1', resolve));
-  const address = decoder.address() as { port: number };
-  try {
-    await runtime.setOptions(
-      convertV4MiniflareOptions({
-        ...runtimeOptions,
-        bindings: {
-          ...(runtimeOptions.bindings as Record<string, unknown>),
-          MAX_UPLOAD_BYTES: '80000000',
-          IMAGE_PROCESSOR_URL: 'https://processor.test/variants',
-          IMAGE_PROCESSOR_TOKEN: token,
-        },
-        // HTTPS is required by production code. This test-only outbound fixture routes
-        // that trusted hostname to the local processor, without external services.
-        outboundService: async (request) => {
-          const url = new URL(request.url);
-          if (url.hostname === 'processor.test') {
-            url.protocol = 'http:';
-            url.hostname = '127.0.0.1';
-            url.port = String(address.port);
-          }
-          return fetch(url, {
-            method: request.method,
-            headers: request.headers as HeadersInit,
-            ...(request.method === 'GET' || request.method === 'HEAD'
-              ? {}
-              : { body: request.body as any, duplex: 'half' }),
-          });
-        },
-      }),
-    );
-    const pixels = randomFillSync(Buffer.alloc(3600 * 3600 * 3));
-    const original = await sharp(pixels, { raw: { width: 3600, height: 3600, channels: 3 } })
-      .jpeg({ quality: 100, chromaSubsampling: '4:4:4' })
-      .toBuffer();
-    expect(original.length).toBeGreaterThan(20_000_000);
-    const id = crypto.randomUUID();
-    const asset = {
-      ...sample.assets[0],
-      id,
-      title: 'Existing photograph',
-      explanation: 'Keep this caption',
-      attribution: 'Keep this attribution',
-      categoryIds: ['existing'],
-      source: `originals/${id}`,
-      variants: Object.fromEntries(
-        ['512', '1024', '2048'].map((size) => [size, `variants/${id}/${size}`]),
-      ),
-      width: 3600,
-      height: 3600,
-      bytes: original.length,
-      mime: 'image/jpeg',
-      ready: true,
-    };
-    const document = structuredClone(sample);
-    document.assets.push(asset as any);
-    document.regions[0].assetId = id;
-    const before = JSON.stringify(document);
-    const bucket = await runtime.getR2Bucket('MUSEUM');
-    await bucket.put(
-      asset.source,
-      original.buffer.slice(original.byteOffset, original.byteOffset + original.byteLength),
-      { httpMetadata: { contentType: 'image/jpeg', contentEncoding: 'gzip' } },
-    );
-    tables.museum_assets.push({
-      id,
-      ready: true,
-      created_by: owner,
-      asset: structuredClone(asset),
-      files: [{ key: asset.source, bytes: original.length, mime: 'image/jpeg' }],
-    });
-    const response = await call('/uploads/revalidate', { id });
-    expect(response.status, await response.text()).toBe(200);
-    expect(tables.museum_assets.find((row) => row.id === id).asset).toEqual(asset);
-    expect(JSON.stringify(document)).toBe(before);
-    const restored = await bucket.get(asset.source);
-    expect(
-      Buffer.compare(
-        Buffer.from(await new Response(restored!.body as any).arrayBuffer()),
-        original,
-      ),
-    ).toBe(0);
-    for (const [size, key] of Object.entries(asset.variants)) {
-      const image = await bucket.get(key);
-      expect(await sharp(Buffer.from(await image!.arrayBuffer())).metadata()).toMatchObject({
-        format: 'webp',
-        width: Number(size),
-        height: Number(size),
-      });
-    }
-    const limits = await runtime.dispatchFetch('https://museum.test/api/limits');
-    expect(await limits.json()).toMatchObject({ bytes: 80_000_000, largeDecoder: true });
-    const uploadedId = crypto.randomUUID(),
-      uploaded = {
-        ...asset,
-        id: uploadedId,
-        ready: false,
-        source: `originals/${uploadedId}`,
-        variants: Object.fromEntries(
-          ['512', '1024', '2048'].map((size) => [size, `variants/${uploadedId}/${size}`]),
-        ),
-      };
-    expect(
-      (
-        await call('/uploads', {
-          asset: uploaded,
-          files: [{ key: uploaded.source, bytes: original.length, mime: uploaded.mime }],
-        })
-      ).status,
-    ).toBe(200);
-    const transfer = await runtime.dispatchFetch(
-      `https://museum.test/api/uploads/${uploadedId}/file`,
-      {
-        method: 'PUT',
-        headers: {
-          Authorization: 'Bearer local-fixture',
-          Origin: 'https://museum.test',
-          'Content-Type': uploaded.mime,
-        },
-        body: original,
-      },
-    );
-    expect(transfer.status, await transfer.text()).toBe(200);
-    const finished = await call('/uploads/complete', { id: uploadedId });
-    expect(finished.status, await finished.text()).toBe(200);
-    const saved = await bucket.get(uploaded.source);
-    expect(
-      Buffer.compare(Buffer.from(await new Response(saved!.body as any).arrayBuffer()), original),
-    ).toBe(0);
-  } finally {
-    await runtime.setOptions(convertV4MiniflareOptions(runtimeOptions));
-    await new Promise<void>((resolve) => decoder.close(() => resolve()));
-  }
-}, 60_000);
 afterAll(async () => {
   await new Promise<void>((resolve) => {
     provider.close(() => resolve());
