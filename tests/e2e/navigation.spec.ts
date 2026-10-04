@@ -16,10 +16,20 @@ async function enter(page: Page) {
 }
 
 test('WASD moves on both axes and FPS mouse look works without dragging', async ({ page }) => {
+  // Eight real keyboard/camera round trips are slower with software WebGL on CI.
+  test.slow();
   await enter(page);
   await page.getByRole('button', { name: 'Walk', exact: true }).click();
   await page.getByRole('button', { name: /Start walking/ }).click();
   await expect.poll(() => page.evaluate(() => Boolean(document.pointerLockElement))).toBe(true);
+  // Headless Chromium can warp the virtual cursor when locking it. Establish the
+  // heading used by the axis assertions after that browser-generated mouse event.
+  await page.evaluate(async () => {
+    const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+    const { Engine } = await import(module);
+    Engine.LastCreatedScene.activeCamera.rotation.set(0, 0, 0);
+  });
+  await expect.poll(async () => (await camera(page))!.yaw).toBe(0);
   for (const [key, axis, direction] of [
     ['a', 'x', -1],
     ['d', 'x', 1],
