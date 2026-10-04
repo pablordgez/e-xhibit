@@ -217,14 +217,11 @@ it('migrates a large existing original without changing its ID, metadata or exhi
   }
 }, 60_000);
 afterAll(async () => {
-  try {
-    await runtime?.dispose();
-  } finally {
-    await new Promise<void>((resolve) => {
-      provider.close(() => resolve());
-      provider.closeAllConnections();
-    });
-  }
+  await new Promise<void>((resolve) => {
+    provider.close(() => resolve());
+    provider.closeAllConnections();
+  });
+  await runtime?.dispose();
 }, 30_000);
 
 async function call(path: string, body: unknown) {
@@ -366,8 +363,15 @@ it('uploads and migrates originals above 20 MB using native Images and a browser
       );
       expect(image.status).toBe(200);
       expect(image.headers.get('X-Content-Type-Options')).toBe('nosniff');
+      expect(await sharp(Buffer.from(await image.arrayBuffer())).metadata()).toMatchObject({
+        format: 'webp',
+        width: 2048,
+        height: Math.round((height * 2048) / width),
+      });
       const frozenOriginal = await bucket.get(`published/${progress.id}/originals/${id}`);
       expect(frozenOriginal!.httpMetadata?.contentDisposition).toBe('attachment');
+      // Consume the large R2 stream: an unread body can keep Miniflare's proxy open.
+      expect(Buffer.compare(Buffer.from(await frozenOriginal!.arrayBuffer()), original)).toBe(0);
       // Public inline delivery never accepts originals, including a header-valid opaque original.
       expect(
         (
