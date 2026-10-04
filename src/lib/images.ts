@@ -1,5 +1,5 @@
 import { type Asset, uid } from '../core/model';
-import { api, demo, putBlob } from './storage';
+import { api, demo, putBlob, imageUploadLimits } from './storage';
 import { imageDimensions } from '../core/imageMetadata';
 export function dimensions(width: number, height: number, edge: number) {
   const scale = Math.min(1, edge / Math.max(width, height));
@@ -14,25 +14,31 @@ export async function uploadImage(
 ): Promise<Asset> {
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type))
     throw Error('Choose a JPEG, PNG, or WebP image.');
-  if (file.size > 25 * 1024 * 1024) throw Error('Images must be no larger than 25 MB.');
+  const limits = await imageUploadLimits();
+  if (file.size > limits.bytes)
+    throw Error(`Images must be no larger than ${Math.round(limits.bytes / 1_000_000)} MB.`);
   const header = imageDimensions(
     new Uint8Array(await file.slice(0, 262144).arrayBuffer()),
     file.type,
   );
   if (!header || header.width < 1 || header.height < 1)
     throw Error('Could not read this image. Re-export it as a standard JPEG, PNG, or WebP.');
-  if (header.width * header.height > 40_000_000)
-    throw Error('Images must be no larger than 40 megapixels.');
+  if (header.width * header.height > limits.pixels)
+    throw Error(
+      `Images must be no larger than ${Math.round(limits.pixels / 1_000_000)} megapixels.`,
+    );
   onProgress('Reading image…');
   const bitmap = await createImageBitmap(file);
   try {
-    if (bitmap.width * bitmap.height > 40_000_000)
-      throw Error('Images must be no larger than 40 megapixels.');
+    if (bitmap.width * bitmap.height > limits.pixels)
+      throw Error(
+        `Images must be no larger than ${Math.round(limits.pixels / 1_000_000)} megapixels.`,
+      );
     const id = uid(),
       entries: { key: string; blob: Blob; size: string }[] = [
         { key: `originals/${id}`, blob: file, size: 'original' },
       ];
-    for (const edge of [512, 1024, 2048]) {
+    for (const edge of demo ? [512, 1024, 2048] : [2048]) {
       const d = dimensions(bitmap.width, bitmap.height, edge),
         canvas = document.createElement('canvas');
       canvas.width = d.width;
@@ -45,7 +51,13 @@ export async function uploadImage(
           0.9,
         ),
       );
-      entries.push({ key: `variants/${id}/${edge}`, blob, size: String(edge) });
+      if (blob.type !== 'image/webp' || blob.size > 9_000_000)
+        throw Error('Could not prepare this image. Use a browser that supports WebP images.');
+      entries.push({
+        key: demo ? `variants/${id}/${edge}` : `masters/${id}`,
+        blob,
+        size: String(edge),
+      });
     }
     const asset: Asset = {
       id,
@@ -57,32 +69,44 @@ export async function uploadImage(
       bytes: file.size,
       mime: file.type as Asset['mime'],
       source: entries[0].key,
-      variants: Object.fromEntries(entries.slice(1).map((e) => [e.size, e.key])),
+      variants: Object.fromEntries(
+        [512, 1024, 2048].map((edge) => [String(edge), `variants/${id}/${edge}`]),
+      ),
       downloadable: false,
       ready: false,
     };
-    onProgress('Uploading original and display versions…');
+    onProgress('Uploading image…');
     if (demo) {
       for (const e of entries) await putBlob(e.key, e.blob);
     } else {
-      const { uploads } = await api('/uploads', {
+      await api('/uploads', {
         method: 'POST',
         body: JSON.stringify({
           asset,
-          files: entries.map((e) => ({ key: e.key, bytes: e.blob.size, mime: e.blob.type })),
+          files: entries.map((entry) => ({
+            key: entry.key,
+            bytes: entry.blob.size,
+            mime: entry.blob.type,
+          })),
         }),
       });
-      await Promise.all(
-        entries.map(async (e, i) => {
-          const response = await fetch(uploads[i].url, {
-            method: 'PUT',
-            headers: { 'Content-Type': e.blob.type },
-            body: e.blob,
-          });
-          if (!response.ok) throw Error('Upload interrupted. Retry this image.');
-        }),
-      );
-      await api('/uploads/complete', { method: 'POST', body: JSON.stringify({ id }) });
+      await api(`/uploads/${id}/file`, {
+        method: 'PUT',
+        headers: { 'Content-Type': file.type },
+        body: file,
+      });
+      await api(`/uploads/${id}/master`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'image/webp' },
+        body: entries[1].blob,
+      });
+      onProgress('Preparing display versions…');
+      return (
+        await api<{ asset: Asset }>('/uploads/complete', {
+          method: 'POST',
+          body: JSON.stringify({ id }),
+        })
+      ).asset;
     }
     return { ...asset, ready: true };
   } finally {

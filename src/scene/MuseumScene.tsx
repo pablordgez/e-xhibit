@@ -752,7 +752,13 @@ export default function MuseumScene({
             engine.getRenderWidth() *
             (Math.tan(1.1 / 2) / Math.tan(camera.fov / 2));
           const size = projected > 900 ? '2048' : projected > 400 ? '1024' : '512';
-          if (t.pending || t.size === size) continue;
+          if (t.pending || t.size === size || (t.failures ?? 0) >= 3 || now < (t.retryAt ?? 0))
+            continue;
+          const failed = () => {
+            t.pending = false;
+            t.failures = (t.failures ?? 0) + 1;
+            t.retryAt = performance.now() + 2000 * 2 ** t.failures;
+          };
           t.pending = true;
           const a = doc.assets.find((a) => a.id === t.assetId)!;
           assetUrl(a, size)
@@ -774,15 +780,15 @@ export default function MuseumScene({
                   t.size = size;
                   t.loaded = true;
                   t.pending = false;
+                  t.failures = 0;
                 },
                 () => {
-                  t.pending = false;
+                  texture.dispose();
+                  failed();
                 },
               );
             })
-            .catch(() => {
-              t.pending = false;
-            });
+            .catch(failed);
         }
       }
       if (++frames % 240 === 0 && !sharp && engine.getFps() < 28 && movementScale < 2.5) {

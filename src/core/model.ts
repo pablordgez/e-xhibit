@@ -49,11 +49,7 @@ export const assetSchema = z.object({
   attribution: z.string().max(500),
   width: z.number().int().positive().max(40000),
   height: z.number().int().positive().max(40000),
-  bytes: z
-    .number()
-    .int()
-    .min(0)
-    .max(25 * 1024 * 1024),
+  bytes: z.number().int().min(0).max(500_000_000),
   mime: z.enum(['image/jpeg', 'image/png', 'image/webp']),
   source: z.string().max(500),
   variants: z.record(z.string().max(500)),

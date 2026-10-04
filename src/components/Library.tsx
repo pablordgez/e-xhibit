@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Upload, ImagePlus, Trash2, Tags } from 'lucide-react';
 import { type MuseumDocument, type Asset } from '../core/model';
 import { uploadImage } from '../lib/images';
@@ -6,6 +6,7 @@ import { Image, Modal } from './common';
 import { ArtworkFilters } from './ArtworkBrowser';
 import CategoryManager from './CategoryManager';
 import { filterArtwork } from '../core/collection';
+import { imageUploadLimits } from '../lib/storage';
 export default function Library({
   doc,
   change,
@@ -18,7 +19,13 @@ export default function Library({
     [progress, setProgress] = useState(''),
     [error, setError] = useState(''),
     [category, setCategory] = useState(''),
-    [manageCategories, setManageCategories] = useState(false);
+    [manageCategories, setManageCategories] = useState(false),
+    [uploadLimit, setUploadLimit] = useState<number | null>(null);
+  useEffect(() => {
+    void imageUploadLimits()
+      .then((limits) => setUploadLimit(limits.bytes))
+      .catch(() => {});
+  }, []);
   const input = useRef<HTMLInputElement>(null),
     asset = doc.assets.find((a) => a.id === selected);
   const categories = doc.categories ?? [];
@@ -143,7 +150,10 @@ export default function Library({
         >
           <ImagePlus size={28} />
           <strong>Add artwork</strong>
-          <span>JPEG, PNG, WebP · Up to 25 MB</span>
+          <span>
+            JPEG, PNG, WebP
+            {uploadLimit !== null ? ` · Up to ${Math.round(uploadLimit / 1_000_000)} MB` : ''}
+          </span>
           <span>Any aspect ratio. Always preserved.</span>
         </button>
       </div>

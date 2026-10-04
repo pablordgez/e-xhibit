@@ -24,6 +24,8 @@ export type TextureSlot = {
   loaded: boolean;
   pending: boolean;
   last: number;
+  failures?: number;
+  retryAt?: number;
 };
 type Box = (
   name: string,

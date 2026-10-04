@@ -107,8 +107,9 @@ export function compile(doc: MuseumDocument): Layout {
     })),
     ramps: Layout['ramps'] = [],
     edges: Layout['edges'] = new Map(doc.rooms.map((r) => [r.id, []]));
-  const issue = (code: string, message: string, target: string) =>
-    issues.push({ code, message, target });
+  const issue = (code: string, message: string, target: string) => {
+    if (issues.length < 100) issues.push({ code, message, target });
+  };
   const ids = new Set<string>();
   for (const item of [
     ...doc.rooms,
@@ -291,7 +292,11 @@ export function compile(doc: MuseumDocument): Layout {
     if (r.assetId) {
       const a = doc.assets.find((a) => a.id === r.assetId);
       if (!a || !a.ready) issue('asset', 'Exhibit image has not finished uploading.', r.id);
-      if (a && !fitExhibit(r, a.width / a.height, r.frame ?? doc.defaultFrame, a).fits)
+      if (
+        a &&
+        (r.plaque === 'none' || a.explanation.length <= 600) &&
+        !fitExhibit(r, a.width / a.height, r.frame ?? doc.defaultFrame, a).fits
+      )
         issue('fit', 'Image, frame, and explanation need more wall space.', r.id);
       if (a && r.plaque !== 'none' && a.explanation.length > 600)
         issue(
@@ -301,19 +306,29 @@ export function compile(doc: MuseumDocument): Layout {
         );
     }
   }
-  for (let i = 0; i < doc.regions.length; i++)
-    for (let j = i + 1; j < doc.regions.length; j++) {
-      const a = doc.regions[i],
-        b = doc.regions[j];
-      if (
-        a.wall === b.wall &&
-        a.x < b.x + b.w - 0.001 &&
-        a.x + a.w > b.x + 0.001 &&
-        a.y < b.y + b.h - 0.001 &&
-        a.y + a.h > b.y + 0.001
-      )
-        issue('region-overlap', 'Wall regions overlap.', b.id);
-    }
+  const regionsByWall = new Map<string, Region[]>();
+  for (const region of doc.regions) {
+    const group = regionsByWall.get(region.wall) ?? [];
+    group.push(region);
+    regionsByWall.set(region.wall, group);
+  }
+  for (const group of regionsByWall.values()) {
+    group.sort((a, b) => a.x - b.x);
+    for (let i = 0; i < group.length && issues.length < 100; i++)
+      for (let j = i + 1; j < group.length && issues.length < 100; j++) {
+        const a = group[i],
+          b = group[j];
+        if (b.x >= a.x + a.w - 0.001) break;
+        if (
+          a.wall === b.wall &&
+          a.x < b.x + b.w - 0.001 &&
+          a.x + a.w > b.x + 0.001 &&
+          a.y < b.y + b.h - 0.001 &&
+          a.y + a.h > b.y + 0.001
+        )
+          issue('region-overlap', 'Wall regions overlap.', b.id);
+      }
+  }
   for (const r of doc.rooms)
     if (r.kind === 'information') {
       if (!r.pages.length) issue('book', `${r.name} needs at least one book page.`, r.id);

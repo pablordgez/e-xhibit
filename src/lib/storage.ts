@@ -13,6 +13,47 @@ export const supabase = cloudConfigured
   ? createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY)
   : null;
 export type Snapshot = { document: MuseumDocument; revision: number; publication: string | null };
+let limitRequest: Promise<{ bytes: number; pixels: number; largeDecoder: boolean }> | undefined;
+export function imageUploadLimits() {
+  if (demo) return Promise.resolve({ bytes: 100_000_000, pixels: 100_000_000, largeDecoder: true });
+  return (limitRequest ??= api('/limits').catch((error) => {
+    limitRequest = undefined;
+    throw error;
+  }));
+}
+const migrations = new Map<string, Promise<void>>();
+async function prepareExistingImages(document: MuseumDocument) {
+  const assets = document.assets.filter((asset) => /^originals\/[\w-]+$/.test(asset.source));
+  for (let offset = 0; offset < assets.length; offset += 50) {
+    const group = assets.slice(offset, offset + 50);
+    const statuses = await api<{ id: string; validated: boolean }[]>(
+      '/asset-status?ids=' + group.map((asset) => asset.id).join(','),
+    );
+    for (const asset of group) {
+      if (statuses.find((status) => status.id === asset.id)?.validated) continue;
+      let pending = migrations.get(asset.id);
+      if (!pending) {
+        pending = (async () => {
+          try {
+            await api('/uploads/revalidate', {
+              method: 'POST',
+              body: JSON.stringify({ id: asset.id }),
+            });
+          } catch (error) {
+            throw Error(
+              `Existing artwork “${asset.title}” could not be prepared: ${(error as Error).message}`,
+            );
+          }
+          // Leave room in the member request budget during a large one-time migration.
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+        })();
+        migrations.set(asset.id, pending);
+        void pending.catch(() => migrations.delete(asset.id));
+      }
+      await pending;
+    }
+  }
+}
 const key = 'exhibit-draft-v1';
 export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const token = (await supabase?.auth.getSession())?.data.session?.access_token;
@@ -48,7 +89,10 @@ export async function getDraft(): Promise<Snapshot> {
 }
 export async function saveDraft(document: MuseumDocument, revision: number): Promise<Snapshot> {
   museumSchema.parse(document);
-  if (!demo) return api('/draft', { method: 'PUT', body: JSON.stringify({ document, revision }) });
+  if (!demo) {
+    await prepareExistingImages(document);
+    return api('/draft', { method: 'PUT', body: JSON.stringify({ document, revision }) });
+  }
   const current = await getDraft();
   if (current.revision !== revision)
     throw Object.assign(
@@ -65,6 +109,8 @@ export async function saveDraft(document: MuseumDocument, revision: number): Pro
 }
 export async function publish(document: MuseumDocument, revision: number, previous: string | null) {
   if (!demo) {
+    // An unchanged saved legacy draft can publish without passing through saveDraft.
+    await prepareExistingImages(document);
     let progress = await api<{ id: string; done: boolean; cursor: number }>('/publish', {
       method: 'POST',
       body: JSON.stringify({ revision, previous }),
@@ -95,8 +141,10 @@ export async function getPublished(): Promise<{ document: MuseumDocument; id: st
   }
   return api('/current');
 }
-export async function versions(): Promise<{ id: string; name: string; createdAt: string }[]> {
-  if (!demo) return api('/versions');
+export async function versions(
+  offset = 0,
+): Promise<{ id: string; name: string; createdAt: string }[]> {
+  if (!demo) return api(`/versions?offset=${offset}`);
   return Object.keys(localStorage)
     .filter((k) => k.startsWith('exhibit-version-'))
     .map((k) => ({
@@ -146,10 +194,7 @@ export async function assetUrl(asset: Asset, size = '1024'): Promise<string> {
     blobUrls.set(key, url);
     return url;
   }
-  if (key.startsWith('published/'))
-    return import.meta.env.VITE_ASSET_BASE_URL
-      ? `${import.meta.env.VITE_ASSET_BASE_URL.replace(/\/$/, '')}/${key}`
-      : `/api/media/${encodeURIComponent(key)}`;
+  if (key.startsWith('published/')) return `/api/media/${encodeURIComponent(key)}`;
   return (await api<{ url: string }>(`/media-url?key=${encodeURIComponent(key)}`)).url;
 }
 export function exportDocument(document: MuseumDocument) {

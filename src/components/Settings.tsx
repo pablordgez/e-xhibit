@@ -15,18 +15,37 @@ export default function Settings({
     [members, setMembers] = useState<{ user_id: string; email: string; role: string }[]>([]),
     [email, setEmail] = useState(''),
     [error, setError] = useState(''),
-    [usage, setUsage] = useState<number | null>(null);
+    [usage, setUsage] = useState<number | null>(null),
+    [moreHistory, setMoreHistory] = useState(false),
+    [loadingHistory, setLoadingHistory] = useState(false);
   useEffect(() => {
     versions()
-      .then(setHistory)
+      .then((rows) => {
+        setHistory(rows);
+        setMoreHistory(!demo && rows.length === 20);
+      })
       .catch((e) => setError(e.message));
     if (!demo) {
       api('/members')
         .then(setMembers)
         .catch((e) => setError(e.message));
-      api('/usage')
-        .then((d) => setUsage(d.bytes))
-        .catch(() => {});
+      void (async () => {
+        let total = 0,
+          next: { bucket: number; cursor?: string } | null = { bucket: 0 };
+        while (next) {
+          const page: { bytes: number; next: { bucket: number; cursor?: string } | null } =
+            await api(
+              '/usage?' +
+                new URLSearchParams({
+                  bucket: String(next.bucket),
+                  ...(next.cursor ? { cursor: next.cursor } : {}),
+                }),
+            );
+          total += page.bytes;
+          next = page.next;
+        }
+        setUsage(total);
+      })().catch(() => {});
     }
   }, []);
   const patch = (p: Partial<MuseumDocument>) => change((d) => ({ ...d, ...p }));
@@ -161,6 +180,26 @@ export default function Settings({
             ))
           ) : (
             <p className="muted">Your first publication will appear here.</p>
+          )}
+          {moreHistory && (
+            <button
+              className="secondary"
+              disabled={loadingHistory}
+              onClick={async () => {
+                setLoadingHistory(true);
+                try {
+                  const rows = await versions(history.length);
+                  setHistory((previous) => [...previous, ...rows]);
+                  setMoreHistory(rows.length === 20);
+                } catch (e) {
+                  setError((e as Error).message);
+                } finally {
+                  setLoadingHistory(false);
+                }
+              }}
+            >
+              {loadingHistory ? 'Loading…' : 'Older publications'}
+            </button>
           )}
           <hr />
           <h3>Invited editors</h3>
