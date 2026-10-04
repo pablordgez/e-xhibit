@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
-import { Download, History, UserPlus, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Download, Upload, History, UserPlus, Trash2 } from 'lucide-react';
 import { type MuseumDocument, type Frame } from '../core/model';
 import { api, demo, exportDocument, versions } from '../lib/storage';
+import { readMuseumImport } from '../core/documentImport';
+import { Modal } from './common';
 export default function Settings({
   doc,
   change,
   onRollback,
+  onImport,
 }: {
   doc: MuseumDocument;
   change: (fn: (d: MuseumDocument) => MuseumDocument) => void;
   onRollback: (id: string) => Promise<void>;
+  onImport: (document: MuseumDocument) => Promise<void>;
 }) {
   const [history, setHistory] = useState<Awaited<ReturnType<typeof versions>>>([]),
     [members, setMembers] = useState<{ user_id: string; email: string; role: string }[]>([]),
@@ -18,6 +22,11 @@ export default function Settings({
     [usage, setUsage] = useState<number | null>(null),
     [moreHistory, setMoreHistory] = useState(false),
     [loadingHistory, setLoadingHistory] = useState(false);
+  const importInput = useRef<HTMLInputElement>(null);
+  const [candidate, setCandidate] = useState<MuseumDocument | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState('');
+  const [importMessage, setImportMessage] = useState('');
   useEffect(() => {
     versions()
       .then((rows) => {
@@ -147,13 +156,115 @@ export default function Settings({
               ? `${(usage / 1024 / 1024).toFixed(1)} MB stored, including retained publications.`
               : 'Local image files are stored in this browser. Cloud usage appears after configuration.'}
           </p>
-          <button className="secondary" onClick={() => exportDocument(doc)}>
-            <Download size={15} /> Export museum document
-          </button>
+          <div className="button-row">
+            <button className="secondary" onClick={() => exportDocument(doc)}>
+              <Download size={15} /> Export museum document
+            </button>
+            <button
+              className="secondary"
+              disabled={importing}
+              onClick={() => importInput.current?.click()}
+            >
+              <Upload size={15} /> Import museum document
+            </button>
+          </div>
+          <input
+            ref={importInput}
+            type="file"
+            accept=".json,application/json"
+            aria-label="Museum document file"
+            hidden
+            onChange={async (event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (!file) return;
+              setImportError('');
+              setImportMessage('');
+              setImporting(true);
+              try {
+                setCandidate(await readMuseumImport(file));
+              } catch (e) {
+                setImportError((e as Error).message);
+              } finally {
+                setImporting(false);
+              }
+            }}
+          />
           <p className="tiny muted">
-            The document references image files. Back up the R2 bucket separately to preserve
-            originals and every display version.
+            Export saves the draft's layout, artwork details and settings. Import restores that
+            draft; it does not publish it. Image files are separate: keep both R2 buckets and the
+            Supabase database backed up. In the local demo, import into the same browser containing
+            the images.
           </p>
+          {importError && !candidate && (
+            <p role="alert" className="error">
+              {importError}
+            </p>
+          )}
+          {importMessage && <p role="status">{importMessage}</p>}
+          {candidate && (
+            <Modal
+              title="Import museum document"
+              onClose={() => {
+                if (!importing) setCandidate(null);
+              }}
+            >
+              <p>
+                Replace the working draft with <strong>{candidate.name}</strong>?
+              </p>
+              <p>
+                {candidate.rooms.length} rooms · {candidate.assets.length} artworks ·{' '}
+                {candidate.regions.filter((region) => region.assetId).length} placements
+              </p>
+              <p>
+                The published exhibition stays unchanged. Images must already exist in this
+                installation. After import, you can undo it in Museum builder during this editing
+                session.
+              </p>
+              <button
+                className="secondary"
+                disabled={importing}
+                onClick={() => exportDocument(doc)}
+              >
+                Download current draft
+              </button>
+              {importError && (
+                <p role="alert" className="error">
+                  {importError}
+                </p>
+              )}
+              <div className="button-row">
+                <button
+                  className="secondary"
+                  disabled={importing}
+                  onClick={() => setCandidate(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="primary"
+                  disabled={importing}
+                  onClick={async () => {
+                    setImporting(true);
+                    setImportError('');
+                    try {
+                      await onImport(candidate);
+                      setCandidate(null);
+                      setImportMessage(
+                        'Museum document imported and saved. Review it before publishing.',
+                      );
+                    } catch (e) {
+                      setImportError((e as Error).message);
+                    } finally {
+                      setImporting(false);
+                    }
+                  }}
+                >
+                  {importing ? 'Checking images and importing…' : 'Replace draft'}
+                </button>
+              </div>
+            </Modal>
+          )}
           <hr />
           <h3>Published versions</h3>
           {history.length ? (

@@ -503,6 +503,38 @@ describe('security regressions: uploads and budgets', () => {
     expect((await call('/draft', 'PUT', { document, revision: 0 })).status).toBe(422);
   });
 });
+describe('import image availability', () => {
+  it('checks the original and all display objects without changing the draft', async () => {
+    const { asset, bytes } = uploadFixture();
+    const files = [asset.source, ...Object.values(asset.variants)].map((key) => ({
+      key,
+      bytes: bytes.length,
+      validation: 'images-v1',
+    }));
+    tables.museum_assets.push({
+      id: asset.id,
+      ready: true,
+      asset: { ...asset, ready: true },
+      files,
+    });
+    for (const file of files) await bucket.put(file.key, bytes);
+    const before = structuredClone(tables.museum_drafts);
+    const path = `/asset-status?check-files=1&ids=${asset.id}`;
+    expect(await (await call(path)).json()).toEqual([
+      { id: asset.id, validated: true, filesAvailable: true },
+    ]);
+    await bucket.delete(asset.variants['2048']);
+    expect(await (await call(path)).json()).toEqual([
+      { id: asset.id, validated: true, filesAvailable: false },
+    ]);
+    expect(tables.museum_drafts).toEqual(before);
+    expect((await call(path, 'GET', undefined, false)).status).toBe(401);
+  });
+  it('limits physical image checks to ten assets per request', async () => {
+    const ids = Array.from({ length: 11 }, () => crypto.randomUUID());
+    expect((await call('/asset-status?check-files=1&ids=' + ids.join(','))).status).toBe(422);
+  });
+});
 describe('security regressions: publication and request composition', () => {
   it('checks the commit registry even when media policy is cached, including the former asset hostname', async () => {
     const id = crypto.randomUUID(),

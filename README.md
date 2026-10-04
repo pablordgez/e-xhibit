@@ -36,7 +36,7 @@ You will need:
 
 On Windows, open **PowerShell**. On macOS or Linux, open **Terminal**. Run the commands below in that window, one line at a time. Do not include the surrounding backticks. When an example contains `YOUR_...`, replace it with your own value.
 
-**Costs:** each provider has its own allowances and limits. Cloudflare Images currently includes 5,000 unique transformations per month on its Free plan; additional transformations require its Paid plan. E-xhibit normally creates three display sizes when an image is uploaded and stores them in R2, so visitor views do not repeat those transformations. Images are stored in R2 rather than the separate Images storage product. Review [Images pricing](https://developers.cloudflare.com/images/pricing/), [R2 pricing](https://developers.cloudflare.com/r2/pricing/), [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [Supabase pricing](https://supabase.com/pricing) before choosing plans. The default application storage budget is 20 GiB, which exceeds R2's free storage allowance.
+**Costs:** each provider has its own allowances and limits. Cloudflare Images currently includes 5,000 unique transformations per month on its Free plan; additional transformations require its Paid plan. E-xhibit normally creates three display sizes when an image is uploaded and stores them in R2, so visitor views do not repeat those transformations. Images are stored in R2 rather than the separate Images storage product. Review [Images pricing](https://developers.cloudflare.com/images/pricing/), [R2 pricing](https://developers.cloudflare.com/r2/pricing/), [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/) and [Supabase pricing](https://supabase.com/pricing) before choosing plans. The default 20 GiB storage budget is an application safety limit; setting it does not reserve storage or charge you for 20 GiB. See the storage-budget explanation in step 9 before choosing your limit.
 
 ### 1. Download the project
 
@@ -159,7 +159,17 @@ Keep the `IMAGES`, `MUSEUM`, `DISPLAY`, `AUTH_LIMITER`, `CREATE_LIMITER` and sch
 
 The browser prepares a small display master automatically, and Cloudflare decodes it and generates display images up to 2048 pixels on the longest edge. The original file remains unchanged in private R2 storage. Originals above 20 MB work with this flow; Cloudflare's decoder receives the small master. The optional `image-processor/` service is unnecessary for this installation, so leave `IMAGE_PROCESSOR_URL` and `IMAGE_PROCESSOR_TOKEN` unset. The [Images binding](https://developers.cloudflare.com/images/optimization/binding/) is deployed with the Worker.
 
-The storage budget includes images, pending work and retained publications. Failed work is charged conservatively, so the allocation budget can exceed the actual storage shown in the studio. Changing this budget does not change Cloudflare billing. Keep the `control/` objects intact; they track allocations and upload state.
+#### What the 20 GiB storage budget means
+
+`MAX_STORAGE_BYTES` controls how much storage work E-xhibit may allocate. The default is **20 GiB** (`21474836480` bytes); GiB is a size unit, and this setting has no currency value. It does not preallocate an empty 20 GiB bucket, buy a plan, or create an immediate bill. The per-image upload limit is controlled separately by `MAX_UPLOAD_BYTES`.
+
+The budget covers originals, display images, temporary uploads and copies kept for publications. Publishing makes an independent copy of the displayed artwork, and older publications remain stored for restoration. The application also reserves space before work starts. Its safety counter is conservative and partly cumulative: interrupted work and deleted files may remain counted to prevent delayed writes from bypassing the limit. The counter can therefore be higher than the actual stored-file total shown in the studio. Keep the `control/` objects intact; deleting those records would remove the accounting safeguards.
+
+If the next upload or publication would exceed the configured budget, E-xhibit refuses that new allocation. It does not delete your images or erase an existing exhibit. You can choose a different limit by changing `MAX_STORAGE_BYTES` and redeploying; a lower limit does not remove existing data.
+
+**Cloudflare billing uses actual usage, independently of this counter.** R2 Standard currently includes **10 GB-month of storage per month**, shared across the account rather than granted separately to each bucket. Roughly, storing 10 GB throughout a whole month uses 10 GB-month. A configured 20 GiB application limit allows enough storage to exceed that free allowance, but charges depend on what you actually store and for how long. Both E-xhibit buckets contribute to R2 usage. See [R2 pricing and its storage examples](https://developers.cloudflare.com/r2/pricing/).
+
+If you want a smaller application limit, for example **8 GiB**, use `"MAX_STORAGE_BYTES": "8589934592"`. This leaves some storage headroom, but it is not a spending cap: other buckets on your account, request operations, Images transformations, Workers and Supabase have their own usage and allowances. Review the provider dashboards and pricing when estimating costs.
 
 ### 10. Allow your website to read private previews
 
@@ -269,7 +279,22 @@ Set `APP_ORIGIN` to the new HTTPS origin, update Supabase's Site URL and `/admin
 | The public page says the museum is unpublished.              | Finish a successful publication in the studio; saving the draft alone does not publish it.                                                              |
 | Invitations fail.                                            | Check custom SMTP, allowed recipient addresses and the Supabase `/admin` redirect URL.                                                                  |
 
-Use **Museum settings → Export museum document** to save a copy of the draft. That export references images; it does not contain them. Back up both private R2 buckets and the Supabase database separately. **Published versions → Restore** switches the public exhibition to a retained version without replacing the current draft. Originals, display images and retained versions all contribute to storage use.
+#### Export and restore your draft
+
+**Museum settings → Export museum document** downloads `museum-backup.json`, containing the working draft's rooms, floors, artwork placements and descriptions, categories, books and settings. The JSON references image files; it does not contain them, editor accounts or publication history. Back up both private R2 buckets and the Supabase database separately, keeping the existing object keys and asset records intact.
+
+To restore an exported draft:
+
+1. Sign in to the studio and open **Museum settings → Import museum document**.
+2. Choose your exported JSON file. Existing version 1 exports are supported. JSON files can be up to 16 MiB; the document itself must also fit the application's normal save limit.
+3. Review the exhibit name and counts in the confirmation dialog. **Download current draft** saves a copy of the draft you are about to replace; **Cancel** leaves it unchanged.
+4. Select **Replace draft**. The application validates the document and checks that its uploaded images still exist in this installation before saving the replacement. Wait for the imported-and-saved confirmation. Invalid documents, missing images and conflicting edits stop the import without replacing your working draft.
+5. Review the restored draft. During the same editing session, **Museum builder → Undo** can return to the previous draft. The undo history is cleared when you reload the page.
+6. Publish separately when ready. Import does not change the exhibition that visitors currently see.
+
+Import restores a draft into the installation that contains its image files and asset records. For recovery into another installation, restore the database and both R2 backups first; the JSON alone cannot recreate those files or records. Local-demo exports must be imported into the browser that still contains their image data.
+
+**Published versions → Restore** switches the public exhibition to a retained version without replacing the working draft. Originals, display images and retained versions all contribute to storage use.
 
 ### Try it locally or contribute
 

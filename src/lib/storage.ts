@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { museumSchema, type MuseumDocument, type Asset } from '../core/model';
 import { sample } from '../core/sample';
 import { publicDocument } from '../core/publication';
+import { validateMuseumImport } from '../core/documentImport';
 export const cloudConfigured = Boolean(
   import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY,
 );
@@ -106,6 +107,54 @@ export async function saveDraft(document: MuseumDocument, revision: number): Pro
   };
   localStorage.setItem(key, JSON.stringify(result));
   return result;
+}
+export async function importDraft(value: MuseumDocument, revision: number): Promise<Snapshot> {
+  const document = validateMuseumImport(value);
+  const uploaded = document.assets.filter((asset) => !asset.source.startsWith('/art/'));
+  if (demo && uploaded.length) {
+    const database = await db();
+    const store = database.transaction('blobs', 'readonly').objectStore('blobs');
+    await Promise.all(
+      uploaded.flatMap((asset) =>
+        [asset.source, ...Object.values(asset.variants)].map(
+          (key) =>
+            new Promise<void>((resolve, reject) => {
+              const request = store.get(key);
+              request.onsuccess = () =>
+                request.result instanceof Blob
+                  ? resolve()
+                  : reject(
+                      Error(
+                        `Artwork “${asset.title}” is missing from this browser. Import into the browser containing its image files. Your current draft has not been replaced.`,
+                      ),
+                    );
+              request.onerror = () => reject(request.error);
+            }),
+        ),
+      ),
+    );
+  }
+  if (!demo) {
+    await prepareExistingImages(document);
+    for (let start = 0; start < uploaded.length; start += 10) {
+      const group = uploaded.slice(start, start + 10);
+      const statuses = await api<{ id: string; validated: boolean; filesAvailable: boolean }[]>(
+        '/asset-status?check-files=1&ids=' + group.map((asset) => asset.id).join(','),
+      );
+      const missing = group.find(
+        (asset) =>
+          !statuses.some(
+            (status) => status.id === asset.id && status.validated && status.filesAvailable,
+          ),
+      );
+      if (missing)
+        throw Error(
+          `Artwork “${missing.title}” is unavailable in this installation. Restore its image files and asset records from your backups before importing. Your current draft has not been replaced.`,
+        );
+    }
+    return api('/draft', { method: 'PUT', body: JSON.stringify({ document, revision }) });
+  }
+  return saveDraft(document, revision);
 }
 export async function publish(document: MuseumDocument, revision: number, previous: string | null) {
   if (!demo) {

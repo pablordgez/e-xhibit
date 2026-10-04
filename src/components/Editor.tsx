@@ -286,7 +286,17 @@ export default function Editor({
         ) : section === 'contents' ? (
           <RoomContents doc={doc} change={change} />
         ) : (
-          <Settings doc={doc} change={change} onRollback={museum.rollback} />
+          <Settings
+            doc={doc}
+            change={change}
+            onRollback={museum.rollback}
+            onImport={async (document) => {
+              await museum.importDocument(document);
+              setSelected(document.entrance);
+              setFloor(document.rooms.find((room) => room.id === document.entrance)!.floor);
+              setView('plan');
+            }}
+          />
         )}
         <footer className="studio-footer">
           <span>E-xhibit — Exhibition studio</span>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type MuseumDocument } from '../core/model';
-import { getDraft, saveDraft, publish, rollback, type Snapshot } from './storage';
+import { getDraft, saveDraft, importDraft, publish, rollback, type Snapshot } from './storage';
 export function useMuseum() {
   const [state, setState] = useState<{
       doc: MuseumDocument;
@@ -114,6 +114,42 @@ export function useMuseum() {
     publication,
     reload: load,
     flush,
+    importDocument: async (document: MuseumDocument) => {
+      const run = async () => {
+        if (blocked.current)
+          throw Error(
+            'Draft conflict: export your work, then reload the saved draft before importing.',
+          );
+        const current = snapshot.current;
+        if (!current || !docRef.current) throw Error('Draft is not ready.');
+        try {
+          const saved = await importDraft(document, current.revision);
+          snapshot.current = saved;
+          docRef.current = saved.document;
+          setState((previous) =>
+            previous
+              ? {
+                  doc: saved.document,
+                  past: [...previous.past.slice(-49), previous.doc],
+                  future: [],
+                }
+              : previous,
+          );
+          setPublication(saved.publication);
+          setStatus('Museum document imported');
+          setError('');
+        } catch (e) {
+          if ((e as { status?: number }).status === 409) {
+            blocked.current = true;
+            setError((e as Error).message);
+          }
+          throw e;
+        }
+      };
+      const promise = queue.current.then(run, run);
+      queue.current = promise.catch(() => {});
+      return promise;
+    },
     publish: async () => {
       const saved = await flush();
       const result = await publish(saved.document, saved.revision, publication);

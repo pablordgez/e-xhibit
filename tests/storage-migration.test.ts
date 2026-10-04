@@ -24,6 +24,8 @@ function legacyDocument() {
     ['512', '1024', '2048'].map((size) => [size, `variants/${asset.id}/${size}`]),
   );
   for (const region of document.regions) if (region.assetId === oldId) region.assetId = asset.id;
+  for (const room of document.rooms)
+    room.shelves = room.shelves.map((id) => (id === oldId ? asset.id : id));
   return document;
 }
 
@@ -73,4 +75,65 @@ it('does not start publication when legacy original validation fails', async () 
   const { publish } = await import('../src/lib/storage');
   await expect(publish(document, 7, null)).rejects.toThrow('Original is missing.');
   expect(requests).not.toContain('/api/publish');
+});
+
+it('imports in bounded image-check batches and saves using the current revision without publishing', async () => {
+  const document = legacyDocument();
+  const asset = document.assets[0];
+  for (let i = 0; i < 20; i++) {
+    const id = crypto.randomUUID();
+    document.assets.push({
+      ...asset,
+      id,
+      source: `originals/${id}`,
+      variants: Object.fromEntries(
+        ['512', '1024', '2048'].map((size) => [size, `variants/${id}/${size}`]),
+      ),
+    });
+  }
+  const checks: string[][] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string, init: RequestInit = {}) => {
+      if (path.startsWith('/api/asset-status?')) {
+        const url = new URL(path, 'https://museum.test'),
+          ids = url.searchParams.get('ids')!.split(',');
+        if (url.searchParams.has('check-files')) checks.push(ids);
+        return Response.json(ids.map((id) => ({ id, validated: true, filesAvailable: true })));
+      }
+      expect(path).toBe('/api/draft');
+      expect(init.method).toBe('PUT');
+      expect(JSON.parse(init.body as string)).toEqual({ document, revision: 7 });
+      return Response.json({ document, revision: 8, publication: 'existing-publication' });
+    }),
+  );
+  const { importDraft } = await import('../src/lib/storage');
+  expect(await importDraft(document, 7)).toMatchObject({
+    revision: 8,
+    publication: 'existing-publication',
+  });
+  expect(checks.map((ids) => ids.length)).toEqual([10, 10, 1]);
+});
+it('does not write the draft when cloud image files are missing', async () => {
+  const document = legacyDocument(),
+    paths: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (path: string) => {
+      paths.push(path);
+      return Response.json([{ id: document.assets[0].id, validated: true, filesAvailable: false }]);
+    }),
+  );
+  const { importDraft } = await import('../src/lib/storage');
+  await expect(importDraft(document, 7)).rejects.toThrow('current draft has not been replaced');
+  expect(paths).not.toContain('/api/draft');
+});
+it('propagates a concurrent-editor conflict rather than retrying against a newer draft', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json({ error: 'Another editor saved changes.' }, { status: 409 })),
+  );
+  const { importDraft } = await import('../src/lib/storage');
+  await expect(importDraft(sample, 7)).rejects.toMatchObject({ status: 409 });
+  expect(fetch).toHaveBeenCalledTimes(1);
 });

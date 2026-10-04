@@ -373,7 +373,8 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     path === '/api/rollback' ||
     path === '/api/versions/import' ||
     path.startsWith('/api/publish') ||
-    /^\/api\/uploads\/(complete|revalidate)$/.test(path);
+    /^\/api\/uploads\/(complete|revalidate)$/.test(path) ||
+    (path === '/api/asset-status' && url.searchParams.get('check-files') === '1');
   const release = heavy
     ? await heavyWork()
     : /^\/api\/uploads\/[\w-]+\/(file|master)$/.test(path)
@@ -787,9 +788,11 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       return json({ ready: true, asset });
     }
     if (path === '/api/asset-status' && method === 'GET') {
+      const checkFiles = url.searchParams.get('check-files') === '1';
       const ids = z
         .array(z.string().uuid())
-        .max(50)
+        // Four private R2 HEADs per asset, plus authentication/database requests.
+        .max(checkFiles ? 10 : 50)
         .parse((url.searchParams.get('ids') ?? '').split(',').filter(Boolean));
       if (!ids.length) return json([]);
       const rows = [];
@@ -803,10 +806,32 @@ export async function handle(request: Request, env: Env): Promise<Response> {
         offset += page.length;
       }
       return json(
-        rows.map((row: any) => ({
-          id: row.id,
-          validated: row.ready && validatedFiles(row.files),
-        })),
+        await Promise.all(
+          rows.map(async (row: any) => {
+            const validated = Boolean(row.ready && validatedFiles(row.files));
+            if (!checkFiles) return { id: row.id, validated };
+            let filesAvailable = validated;
+            if (validated) {
+              const expected = [
+                `originals/${row.id}`,
+                ...['512', '1024', '2048'].map((size) => `variants/${row.id}/${size}`),
+              ];
+              for (let i = 0; i < expected.length; i++) {
+                const file = row.files[i];
+                if (file.key !== expected[i]) {
+                  filesAvailable = false;
+                  break;
+                }
+                const object = await env.MUSEUM.head(file.key);
+                if (!object || object.size !== file.bytes) {
+                  filesAvailable = false;
+                  break;
+                }
+              }
+            }
+            return { id: row.id, validated, filesAvailable };
+          }),
+        ),
       );
     }
     if (path === '/api/media-url' && method === 'GET') {
