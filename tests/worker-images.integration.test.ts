@@ -246,6 +246,60 @@ it('uploads and migrates originals above 20 MB using native Images and a browser
   }
 }, 60_000);
 
+it('prepares smaller legacy originals from existing rounded display masters and recovers damaged masters without changing artwork', async () => {
+  const width = 6000,
+    height = 4001;
+  const original = await sharp({ create: { width, height, channels: 3, background: '#ab34cd' } })
+    .jpeg()
+    .toBuffer();
+  const master = await sharp(original).resize(2048, 1366).webp().toBuffer();
+  const bucket = await runtime.getR2Bucket('MUSEUM');
+  for (const damaged of [false, true]) {
+    const id = crypto.randomUUID();
+    const asset = {
+      ...sample.assets[0],
+      id,
+      width,
+      height,
+      bytes: original.length,
+      mime: 'image/jpeg',
+      source: `originals/${id}`,
+      ready: true,
+      variants: Object.fromEntries(
+        ['512', '1024', '2048'].map((size) => [size, `variants/${id}/${size}`]),
+      ),
+    };
+    const before = JSON.stringify(asset);
+    tables.museum_assets.push({
+      id,
+      ready: true,
+      asset,
+      created_by: owner,
+      files: [{ key: asset.source, bytes: original.length, mime: asset.mime }],
+    });
+    await bucket.put(asset.source, original);
+    await bucket.put(asset.variants['2048'], damaged ? Buffer.from('not an image') : master);
+    const response = await call('/uploads/revalidate', { id });
+    expect(response.status, await response.text()).toBe(200);
+    const saved = tables.museum_assets.find((row) => row.id === id);
+    expect(JSON.stringify(saved.asset)).toBe(before);
+    expect(saved.files[0].validation).toBe(damaged ? 'images-v1' : 'original-private-v1');
+    expect(Buffer.from(await (await bucket.get(asset.source))!.arrayBuffer())).toEqual(original);
+    for (const [edge, key] of Object.entries(asset.variants)) {
+      const metadata = await sharp(
+        Buffer.from(await (await bucket.get(key))!.arrayBuffer()),
+      ).metadata();
+      expect(metadata.format).toBe('webp');
+      if (!damaged && edge === '512') expect(metadata.width).toBe(511);
+      expect(Math.max(metadata.width!, metadata.height!)).toBeLessThanOrEqual(Number(edge));
+      expect(Math.abs(metadata.width! - Number(edge))).toBeLessThanOrEqual(1);
+      expect(
+        Math.abs(metadata.height! - Math.round((height * Number(edge)) / width)),
+      ).toBeLessThanOrEqual(1);
+    }
+  }
+}, 30_000);
+
 it('rejects malformed display masters even when the original header is acceptable', async () => {
   const original = await sharp({
     create: { width: 16, height: 32, channels: 3, background: '#ab34cd' },

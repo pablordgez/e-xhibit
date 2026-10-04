@@ -747,15 +747,36 @@ export async function handle(request: Request, env: Env): Promise<Response> {
         )
       )
         throw new HttpError(422, 'Original image dimensions or format do not match.');
-      const master =
-        revalidate && object.size > 20_000_000
-          ? await env.MUSEUM.get(a.variants['2048'])
-          : !revalidate && record.files[1]
-            ? await env.MUSEUM.get('staging/' + record.files[1].key)
-            : null;
+      const master = revalidate
+        ? await env.MUSEUM.get(a.variants['2048'])
+        : !revalidate && record.files[1]
+          ? await env.MUSEUM.get('staging/' + record.files[1].key)
+          : null;
       if (!revalidate && record.files[1] && (!master || master.size !== record.files[1].bytes))
         throw new HttpError(422, 'The display master upload is incomplete.');
-      const variants = await trustedVariants(env, a, object, master ?? undefined);
+      let variants;
+      let usedMaster = Boolean(master);
+      try {
+        variants = await trustedVariants(env, a, object, master ?? undefined);
+      } catch (error) {
+        // Existing browser-generated display images avoid camera metadata and
+        // decoder limits. If one is damaged, a small original can still recover it.
+        if (
+          !revalidate ||
+          !master ||
+          object.size > 20_000_000 ||
+          !(error instanceof HttpError) ||
+          error.status !== 422
+        )
+          throw error;
+        const freshOriginal = await env.MUSEUM.get(object.key, {
+          onlyIf: { etagMatches: object.etag },
+        });
+        if (!freshOriginal || !('body' in freshOriginal))
+          throw new HttpError(409, 'Original changed during processing.');
+        variants = await trustedVariants(env, a, freshOriginal);
+        usedMaster = false;
+      }
       // Only store results after every transformation succeeded. Metadata is set by the server.
       await reservation(env, 'uploads', id);
       const original = await env.MUSEUM.get(object.key, { onlyIf: { etagMatches: object.etag } });
@@ -782,7 +803,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
           ready: true,
           asset,
           files: [
-            { ...file, validation: master ? 'original-private-v1' : 'images-v1' },
+            { ...file, validation: usedMaster ? 'original-private-v1' : 'images-v1' },
             ...variants.map((v) => ({
               key: v.key,
               bytes: v.bytes.length,
