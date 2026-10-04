@@ -70,13 +70,17 @@ async function clickStop(
   expect(selected, `a visible, unobstructed ${direction} floor circle`).not.toBeNull();
   await page.mouse.click(selected!.x, selected!.y);
   await expect
-    .poll(async () =>
-      page.evaluate(async (target) => {
-        const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
-        const { Engine } = await import(module);
-        const p = Engine.LastCreatedScene.activeCamera.position;
-        return Math.hypot(p.x - target.x, p.y - 1.65 - target.y, p.z - target.z);
-      }, selected!.target),
+    .poll(
+      async () =>
+        page.evaluate(async (target) => {
+          const module = '/node_modules/.vite/deps/@babylonjs_core_Engines_engine.js';
+          const { Engine } = await import(module);
+          const p = Engine.LastCreatedScene.activeCamera.position;
+          return Math.hypot(p.x - target.x, p.y - 1.65 - target.y, p.z - target.z);
+        }, selected!.target),
+      // Animated movement caps each frame's step, so low-FPS software WebGL takes
+      // more wall-clock time without changing the destination or path assertions.
+      { timeout: viewingCircle ? 30000 : 10000 },
     )
     .toBeLessThan(0.1);
   return true;
@@ -141,6 +145,7 @@ test('the shop and spiral staircase can be visited using only floor circles', as
 });
 
 test('animated travel to a viewing circle never reverses or overshoots', async ({ page }) => {
+  test.slow();
   await enter(page);
   await page
     .getByRole('navigation', { name: 'Nearby destinations' })

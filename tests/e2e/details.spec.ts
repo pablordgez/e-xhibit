@@ -30,6 +30,8 @@ async function aimAt(page: Page, name: string, asset?: string) {
 }
 
 test('information and download signs are identifiable, clickable 3D objects', async ({ page }) => {
+  // Four diagnostic WebGL screenshots each require a software GPU readback on CI.
+  test.slow();
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.emulateMedia({ reducedMotion: 'reduce' });

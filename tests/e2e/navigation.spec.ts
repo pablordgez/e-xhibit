@@ -22,6 +22,15 @@ test('WASD moves on both axes and FPS mouse look works without dragging', async 
   await page.getByRole('button', { name: 'Walk', exact: true }).click();
   await page.getByRole('button', { name: /Start walking/ }).click();
   await expect.poll(() => page.evaluate(() => Boolean(document.pointerLockElement))).toBe(true);
+  // Flush Chromium's asynchronous cursor warp through rendered frames before
+  // establishing the heading. Pointer lock itself becomes true before this event.
+  await page.mouse.move(640, 400);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
   // Headless Chromium can warp the virtual cursor when locking it. Establish the
   // heading used by the axis assertions after that browser-generated mouse event.
   await page.evaluate(async () => {
